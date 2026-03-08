@@ -159,7 +159,8 @@ def enqueue_generation(
 
   month = datetime.now(UTC).strftime('%Y-%m')
   usage = repo.get_usage(current_user.user_id, month, quota_limit=settings.monthly_video_quota)
-  if usage.videos_generated >= settings.monthly_video_quota:
+  is_exempt = current_user.email in settings.quota_exempt_emails
+  if not is_exempt and usage.videos_generated >= settings.monthly_video_quota:
     raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail='Monthly quota exceeded')
 
   if payload.idempotency_key:

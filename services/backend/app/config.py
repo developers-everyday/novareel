@@ -43,6 +43,7 @@ class Settings(BaseSettings):
   cors_origins: list[str] = ['http://localhost:3000']
   admin_user_ids: list[str] = ['beta-user']
   monthly_video_quota: int = 10
+  quota_exempt_emails: list[str] = []
   max_assets_per_project: int = 12
   max_asset_file_size_bytes: int = 10_000_000
   allowed_asset_content_types: list[str] = ['image/jpeg', 'image/png', 'image/webp']

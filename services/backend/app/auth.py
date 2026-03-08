@@ -11,6 +11,7 @@ from app.config import Settings, get_settings
 @dataclass(frozen=True)
 class AuthUser:
   user_id: str
+  email: str = ''
 
 
 def _extract_bearer_token(authorization: str | None) -> str:
@@ -50,7 +51,8 @@ def _verify_clerk_token(token: str, settings: Settings) -> AuthUser:
   if not isinstance(subject, str) or not subject:
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid token subject')
 
-  return AuthUser(user_id=subject)
+  email = payload.get('email', '') or ''
+  return AuthUser(user_id=subject, email=str(email))
 
 
 def get_current_user(
