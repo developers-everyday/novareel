@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 class JobStatus(str, Enum):
   QUEUED = 'queued'
+  ANALYZING = 'analyzing'
   SCRIPTING = 'scripting'
   MATCHING = 'matching'
   NARRATION = 'narration'

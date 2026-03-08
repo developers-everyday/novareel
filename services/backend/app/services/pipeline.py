@@ -53,9 +53,16 @@ def process_generation_job(
     if not assets:
       raise ValueError('no_uploaded_assets')
 
-    repo.update_job(job.id, status=JobStatus.SCRIPTING, stage=JobStatus.SCRIPTING, progress_pct=20)
+    # Phase 1 — Analyze images using Nova Vision
+    repo.update_job(job.id, status=JobStatus.ANALYZING, stage=JobStatus.ANALYZING, progress_pct=10)
     phase_start = time.perf_counter()
-    script_lines = nova.generate_script(project)
+    image_analysis = nova.analyze_images(assets)
+    timings['analyzing_sec'] = round(time.perf_counter() - phase_start, 3)
+
+    # Phase 2 — Generate image-aware script
+    repo.update_job(job.id, status=JobStatus.SCRIPTING, stage=JobStatus.SCRIPTING, progress_pct=25)
+    phase_start = time.perf_counter()
+    script_lines = nova.generate_script(project, image_analysis=image_analysis)
     timings['scripting_sec'] = round(time.perf_counter() - phase_start, 3)
 
     repo.update_job(

@@ -17,7 +17,95 @@ class NovaService:
   def __init__(self, settings: Settings):
     self._settings = settings
 
-  def generate_script(self, project: ProjectRecord) -> list[str]:
+  # ------------------------------------------------------------------
+  # Phase 1: Vision-Based Image Analysis
+  # ------------------------------------------------------------------
+
+  def analyze_images(
+    self,
+    assets: Sequence[AssetRecord],
+  ) -> list[dict]:
+    """Use Nova Lite's multimodal vision to extract product features from each image.
+
+    Returns a list of dicts: [{"asset_id": "...", "description": "..."}]
+    """
+    if self._settings.use_mock_ai or not assets:
+      return [{'asset_id': a.id, 'description': f'Product image: {a.filename}'} for a in assets]
+
+    import base64
+    import logging
+
+    log = logging.getLogger(__name__)
+
+    try:
+      import boto3
+    except ImportError:
+      return [{'asset_id': a.id, 'description': f'Product image: {a.filename}'} for a in assets]
+
+    runtime = boto3.client('bedrock-runtime', region_name=self._settings.aws_region)
+    storage_root = self._settings.local_data_dir / self._settings.local_storage_dir
+
+    results: list[dict] = []
+    for asset in assets:
+      image_path = storage_root / asset.object_key
+      if not image_path.exists():
+        results.append({'asset_id': asset.id, 'description': f'Product image: {asset.filename}'})
+        continue
+
+      try:
+        img_bytes = image_path.read_bytes()
+        img_fmt = (asset.content_type.split('/')[-1] if asset.content_type else 'png')
+        if img_fmt == 'jpg':
+          img_fmt = 'jpeg'
+
+        response = runtime.converse(
+          modelId=self._settings.bedrock_model_script,
+          messages=[{
+            'role': 'user',
+            'content': [
+              {
+                'image': {
+                  'format': img_fmt,
+                  'source': {'bytes': img_bytes},
+                },
+              },
+              {
+                'text': (
+                  'You are a product photography expert. '
+                  'Describe the product in this image in 2-3 sentences. '
+                  'Focus on: what the product is, key visible features, '
+                  'the angle/perspective of the shot, and any branding or text visible. '
+                  'Be specific and concise.'
+                ),
+              },
+            ],
+          }],
+          inferenceConfig={'maxTokens': 200, 'temperature': 0.2},
+        )
+
+        description = ''
+        for block in response['output']['message']['content']:
+          if 'text' in block:
+            description = block['text'].strip()
+            break
+
+        results.append({'asset_id': asset.id, 'description': description or f'Product image: {asset.filename}'})
+        log.info('Analyzed image %s: %s', asset.id, description[:80])
+      except Exception as exc:
+        log.warning('Failed to analyze image %s: %s', asset.id, exc)
+        results.append({'asset_id': asset.id, 'description': f'Product image: {asset.filename}'})
+
+    return results
+
+  # ------------------------------------------------------------------
+  # Phase 2: Image-Aware Script Generation
+  # ------------------------------------------------------------------
+
+  def generate_script(
+    self,
+    project: ProjectRecord,
+    image_analysis: list[dict] | None = None,
+  ) -> list[str]:
     if self._settings.use_mock_ai:
       return self._mock_script(project)
 
@@ -28,11 +116,27 @@ class NovaService:
 
     try:
       runtime = boto3.client('bedrock-runtime', region_name=self._settings.aws_region)
+
+      # Build image context from analysis results
+      image_context = ''
+      if image_analysis:
+        lines_desc = []
+        for i, info in enumerate(image_analysis, 1):
+          lines_desc.append(f'Image {i}: {info["description"]}')
+        image_context = (
+          f'\n\nYou have {len(image_analysis)} product images available:\n'
+          + '\n'.join(lines_desc)
+          + '\n\nWrite your script so each scene highlights a feature visible '
+          'in one of these images. Prioritize the most compelling visual features first. '
+          'Make sure every image is referenced by at least one scene.'
+        )
+
       prompt = (
         'You are an expert video director and copywriter. '
         'Create a 6-scene marketing video script for this product. '
         'You must use the render_video_plan tool to structure your output. '
         f'Product: {project.title}. Description: {project.product_description}'
+        f'{image_context}'
       )
       
       tool_config = {
@@ -191,6 +295,8 @@ class NovaService:
       return dot / mag if mag else 0.0
 
     # Step 2 — for each script line, embed the text and pick the best-matching image
+    # Use a frequency penalty to ensure all images are used before repeating any.
+    asset_usages: dict[str, int] = {a.id: 0 for a in embeddable_assets}
     storyboard: list[StoryboardSegment] = []
     for index, line in enumerate(script_lines):
       chosen_asset: AssetRecord | None = None
@@ -213,7 +319,8 @@ class NovaService:
         line_emb: list[float] = body.get('embeddings', [{}])[0].get('embedding', [])
         chosen_asset = max(
           embeddable_assets,
-          key=lambda a: cosine_similarity(line_emb, image_embeddings[a.id]),
+          key=lambda a: cosine_similarity(line_emb, image_embeddings[a.id])
+                        - (10.0 * asset_usages[a.id]),
         )
       except Exception as exc:
         log.warning('Failed to embed script line %d, using round-robin for this line: %s', index, exc)
@@ -231,6 +338,7 @@ class NovaService:
           duration_sec=segment_length,
         )
       )
+      asset_usages[chosen_asset.id] = asset_usages.get(chosen_asset.id, 0) + 1
 
     return storyboard
 

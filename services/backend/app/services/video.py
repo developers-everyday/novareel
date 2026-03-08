@@ -66,20 +66,50 @@ class VideoService:
       image_path = temp_root / 'thumb.jpg'
       concat_list = temp_root / 'concat.txt'
 
+      # Check once if drawtext is available (requires libfreetype)
+      has_drawtext = False
+      try:
+        filter_check = subprocess.run(
+          [ffmpeg_path, '-filters'], capture_output=True, check=False,
+        )
+        has_drawtext = b'drawtext' in filter_check.stdout
+      except Exception:
+        pass
+
       concat_lines: list[str] = []
 
       for idx, segment in enumerate(storyboard):
         seg_video = temp_root / f'seg_{idx:03d}.mp4'
         seg_duration = segment.duration_sec
         asset_path = self._resolve_asset_path(segment.image_asset_id, project.id)
+        fps = 24
+        total_frames = int(fps * seg_duration)
 
-        # Build video filter chain — no drawtext (ffmpeg may lack libfreetype)
         if asset_path and asset_path.exists():
+          # --- Ken Burns effect: alternate zoom-in / zoom-out ---
+          if idx % 2 == 0:
+            # Zoom in: start at 1.0x, end at 1.3x
+            zoom_expr = f"min(zoom+0.0015,1.3)"
+          else:
+            # Zoom out: start at 1.3x, end at 1.0x
+            zoom_expr = f"if(eq(on\\,1)\\,1.3\\,max(zoom-0.0015\\,1.0))"
+
           vf = (
-            f'scale={width}:{height}:force_original_aspect_ratio=increase,'
-            f'crop={width}:{height},setsar=1'
+            f'scale=8000:-1,'
+            f"zoompan=z='{zoom_expr}':d={total_frames}:s={width}x{height}:fps={fps},"
+            f'setsar=1'
           )
-          input_args = ['-loop', '1', '-i', str(asset_path)]
+
+          # --- Burned-in subtitles ---
+          if has_drawtext and segment.script_line:
+            escaped_text = segment.script_line.replace("'", "\u2019").replace(":", "\\:")
+            vf += (
+              f",drawtext=text='{escaped_text}'"
+              f":fontsize=36:fontcolor=white:borderw=3:bordercolor=black"
+              f":x=(w-text_w)/2:y=h-80"
+            )
+
+          input_args = ['-i', str(asset_path)]
         else:
           logger.info('Segment %d: no image found, using color background', idx)
           vf = 'setsar=1'
@@ -93,7 +123,7 @@ class VideoService:
           '-c:v', 'libx264',
           '-preset', 'fast',
           '-pix_fmt', 'yuv420p',
-          '-r', '24',
+          '-r', str(fps),
           str(seg_video),
         ]
 
