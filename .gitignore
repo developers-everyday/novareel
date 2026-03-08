@@ -1,0 +1,30 @@
+# Node
+node_modules/
+.next/
+out/
+coverage/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.mypy_cache/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+
+# Build artifacts
+apps/web/.next/
+services/backend/.pytest_cache/
+services/backend/dist/
+services/backend/data/*.json
+services/backend/data/*.jsonl
+
+# Logs
+*.log

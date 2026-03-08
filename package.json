@@ -1,0 +1,13 @@
+{
+  "name": "novareel",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace @novareel/web run dev",
+    "build:web": "npm --workspace @novareel/web run build",
+    "lint:web": "npm --workspace @novareel/web run lint"
+  }
+}
