@@ -176,7 +176,7 @@ class NovaService:
           body=json.dumps(payload),
         )
         body = json.loads(resp['body'].read())
-        image_embeddings[asset.id] = body.get('embedding', [])
+        image_embeddings[asset.id] = body.get('embeddings', [{}])[0].get('embedding', [])
       except Exception as exc:
         log.warning('Failed to embed image %s: %s', asset.id, exc)
 
@@ -210,7 +210,7 @@ class NovaService:
           body=json.dumps(payload),
         )
         body = json.loads(resp['body'].read())
-        line_emb: list[float] = body.get('embedding', [])
+        line_emb: list[float] = body.get('embeddings', [{}])[0].get('embedding', [])
         chosen_asset = max(
           embeddable_assets,
           key=lambda a: cosine_similarity(line_emb, image_embeddings[a.id]),

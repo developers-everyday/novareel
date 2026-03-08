@@ -226,7 +226,7 @@ def test_match_images_embedding(tmp_path: Path) -> None:
       # Text embedding — match by line content
       emb = emb_line_0 if params.get('text', {}).get('value') == script_lines[0] else emb_line_1
 
-    response_body = json.dumps({'embedding': emb}).encode('utf-8')
+    response_body = json.dumps({'embeddings': [{'embeddingType': 'FULL', 'embedding': emb}]}).encode('utf-8')
     return {'body': io.BytesIO(response_body)}
 
   mock_runtime = MagicMock()
