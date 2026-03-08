@@ -35,7 +35,7 @@ class Settings(BaseSettings):
   sqs_queue_url: str | None = None
 
   bedrock_model_script: str = 'amazon.nova-lite-v1:0'
-  bedrock_model_embeddings: str = 'amazon.nova-multimodal-embeddings-v1'
+  bedrock_model_embeddings: str = 'amazon.nova-2-multimodal-embeddings-v1:0'
   bedrock_model_voice: str = 'amazon.nova-sonic-v1:0'
   polly_voice_id: str = 'Joanna'
   use_mock_ai: bool = True

@@ -159,7 +159,7 @@ def test_match_images_embedding(tmp_path: Path) -> None:
     local_data_dir=data_dir,
     local_storage_dir='storage',
     aws_region='us-east-1',
-    bedrock_model_embeddings='amazon.nova-multimodal-embeddings-v1',
+    bedrock_model_embeddings='amazon.nova-2-multimodal-embeddings-v1:0',
   )
 
   # --- Write fake image files to disk at the expected object_key paths ---
@@ -275,7 +275,7 @@ def test_match_images_falls_back_to_round_robin_when_files_missing(tmp_path: Pat
     local_data_dir=data_dir,
     local_storage_dir='storage',
     aws_region='us-east-1',
-    bedrock_model_embeddings='amazon.nova-multimodal-embeddings-v1',
+    bedrock_model_embeddings='amazon.nova-2-multimodal-embeddings-v1:0',
   )
 
   now = datetime.utcnow()
