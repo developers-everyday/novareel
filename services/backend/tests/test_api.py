@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
+import json
 import os
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
 
 from fastapi.testclient import TestClient
@@ -122,3 +125,237 @@ def test_project_generation_lifecycle(tmp_path: Path) -> None:
   dead_letter_response = client.get('/v1/admin/dead-letters')
   assert dead_letter_response.status_code == 200
   assert isinstance(dead_letter_response.json(), list)
+
+
+def test_match_images_embedding(tmp_path: Path) -> None:
+  """
+  Verify that match_images uses cosine-similarity embedding results when
+  use_mock_ai=False and boto3 is available.
+
+  Setup
+  -----
+  Two assets: asset_A and asset_B.
+  Two script lines: line_0 and line_1.
+
+  Embeddings are crafted so that:
+    - line_0 text embedding is closest to image_B  (would be asset_A in round-robin)
+    - line_1 text embedding is closest to image_A  (would be asset_B in round-robin)
+
+  This proves the new code is using semantics, not position.
+  """
+  from datetime import datetime
+
+  from app.config import Settings
+  from app.models import AssetRecord
+  from app.services.nova import NovaService
+
+  # --- Build a minimal Settings pointing at tmp_path ---
+  data_dir = tmp_path / 'data'
+  storage_root = data_dir / 'storage'
+  storage_root.mkdir(parents=True)
+
+  settings = Settings(
+    use_mock_ai=False,
+    local_data_dir=data_dir,
+    local_storage_dir='storage',
+    aws_region='us-east-1',
+    bedrock_model_embeddings='amazon.nova-multimodal-embeddings-v1',
+  )
+
+  # --- Write fake image files to disk at the expected object_key paths ---
+  asset_A_key = 'projects/proj-1/assets/asset-A-front.jpg'
+  asset_B_key = 'projects/proj-1/assets/asset-B-side.jpg'
+
+  path_A = storage_root / asset_A_key
+  path_B = storage_root / asset_B_key
+  path_A.parent.mkdir(parents=True, exist_ok=True)
+  path_A.write_bytes(b'fake-image-A')
+  path_B.write_bytes(b'fake-image-B')
+
+  now = datetime.utcnow()
+  assets = [
+    AssetRecord(
+      id='asset-A',
+      project_id='proj-1',
+      owner_id='user-1',
+      filename='front.jpg',
+      content_type='image/jpeg',
+      file_size=12,
+      object_key=asset_A_key,
+      uploaded=True,
+      created_at=now,
+    ),
+    AssetRecord(
+      id='asset-B',
+      project_id='proj-1',
+      owner_id='user-1',
+      filename='side.jpg',
+      content_type='image/jpeg',
+      file_size=12,
+      object_key=asset_B_key,
+      uploaded=True,
+      created_at=now,
+    ),
+  ]
+
+  script_lines = ['front view of the product', 'side angle showing the mount']
+
+  # --- Craft embeddings so semantic match is opposite of round-robin ---
+  # image_A embedding: high in dimension 0
+  # image_B embedding: high in dimension 1
+  # line_0 text embedding: high in dimension 1  → closest to image_B (asset-B)
+  # line_1 text embedding: high in dimension 0  → closest to image_A (asset-A)
+  emb_image_A = [1.0, 0.0]
+  emb_image_B = [0.0, 1.0]
+  emb_line_0  = [0.0, 1.0]  # closest to image_B
+  emb_line_1  = [1.0, 0.0]  # closest to image_A
+
+  call_count = {'n': 0}
+
+  def fake_invoke_model(modelId: str, body: str) -> dict:  # noqa: N803
+    payload = json.loads(body)
+    call_count['n'] += 1
+    if 'inputImage' in payload:
+      # Determine which asset by inspecting the base64 content
+      import base64
+      raw = base64.b64decode(payload['inputImage'])
+      emb = emb_image_A if raw == b'fake-image-A' else emb_image_B
+    else:
+      # Text embedding — match by line content
+      emb = emb_line_0 if payload['inputText'] == script_lines[0] else emb_line_1
+
+    response_body = json.dumps({'embedding': emb}).encode('utf-8')
+    return {'body': io.BytesIO(response_body)}
+
+  mock_runtime = MagicMock()
+  mock_runtime.invoke_model.side_effect = fake_invoke_model
+
+  mock_boto3 = MagicMock()
+  mock_boto3.client.return_value = mock_runtime
+
+  with patch.dict('sys.modules', {'boto3': mock_boto3}):
+    service = NovaService(settings)
+    storyboard = service.match_images(script_lines, assets)
+
+  # Verify the boto3 client was called with the correct service and region
+  mock_boto3.client.assert_called_once_with('bedrock-runtime', region_name='us-east-1')
+
+  # Verify embed calls: 2 images + 2 lines = 4
+  assert call_count['n'] == 4, f"Expected 4 invoke_model calls, got {call_count['n']}"
+
+  # Verify semantic assignment (opposite of round-robin)
+  assert len(storyboard) == 2
+  assert storyboard[0].image_asset_id == 'asset-B', (
+    f"line_0 should match asset-B by embedding similarity, got {storyboard[0].image_asset_id}"
+  )
+  assert storyboard[1].image_asset_id == 'asset-A', (
+    f"line_1 should match asset-A by embedding similarity, got {storyboard[1].image_asset_id}"
+  )
+
+  # Verify ordering and timing are correct
+  assert storyboard[0].order == 1
+  assert storyboard[1].order == 2
+  assert storyboard[0].start_sec == 0.0
+  assert storyboard[1].start_sec == storyboard[0].duration_sec
+
+
+def test_match_images_falls_back_to_round_robin_when_files_missing(tmp_path: Path) -> None:
+  """When no asset files exist on disk, embedding is skipped and round-robin is used."""
+  from datetime import datetime
+
+  from app.config import Settings
+  from app.models import AssetRecord
+  from app.services.nova import NovaService
+
+  data_dir = tmp_path / 'data'
+  (data_dir / 'storage').mkdir(parents=True)
+
+  settings = Settings(
+    use_mock_ai=False,
+    local_data_dir=data_dir,
+    local_storage_dir='storage',
+    aws_region='us-east-1',
+    bedrock_model_embeddings='amazon.nova-multimodal-embeddings-v1',
+  )
+
+  now = datetime.utcnow()
+  assets = [
+    AssetRecord(
+      id='asset-X',
+      project_id='proj-2',
+      owner_id='user-1',
+      filename='x.jpg',
+      content_type='image/jpeg',
+      file_size=10,
+      object_key='projects/proj-2/assets/asset-X-x.jpg',
+      uploaded=True,
+      created_at=now,
+    ),
+    AssetRecord(
+      id='asset-Y',
+      project_id='proj-2',
+      owner_id='user-1',
+      filename='y.jpg',
+      content_type='image/jpeg',
+      file_size=10,
+      object_key='projects/proj-2/assets/asset-Y-y.jpg',
+      uploaded=True,
+      created_at=now,
+    ),
+  ]
+
+  script_lines = ['line one', 'line two', 'line three']
+
+  mock_boto3 = MagicMock()
+
+  with patch.dict('sys.modules', {'boto3': mock_boto3}):
+    service = NovaService(settings)
+    storyboard = service.match_images(script_lines, assets)
+
+  # No invoke_model calls should have been made (files not on disk → skip)
+  mock_boto3.client.return_value.invoke_model.assert_not_called()
+
+  # Round-robin: line0→X, line1→Y, line2→X
+  assert storyboard[0].image_asset_id == 'asset-X'
+  assert storyboard[1].image_asset_id == 'asset-Y'
+  assert storyboard[2].image_asset_id == 'asset-X'
+
+
+def test_match_images_uses_round_robin_in_mock_mode(tmp_path: Path) -> None:
+  """When use_mock_ai=True, no Bedrock calls are made and round-robin is used."""
+  from datetime import datetime
+
+  from app.config import Settings
+  from app.models import AssetRecord
+  from app.services.nova import NovaService
+
+  data_dir = tmp_path / 'data'
+  (data_dir / 'storage').mkdir(parents=True)
+
+  settings = Settings(
+    use_mock_ai=True,
+    local_data_dir=data_dir,
+    local_storage_dir='storage',
+    aws_region='us-east-1',
+  )
+
+  now = datetime.utcnow()
+  assets = [
+    AssetRecord(
+      id='img-1', project_id='p', owner_id='u', filename='a.jpg',
+      content_type='image/jpeg', file_size=1,
+      object_key='projects/p/assets/img-1-a.jpg', uploaded=True, created_at=now,
+    ),
+    AssetRecord(
+      id='img-2', project_id='p', owner_id='u', filename='b.jpg',
+      content_type='image/jpeg', file_size=1,
+      object_key='projects/p/assets/img-2-b.jpg', uploaded=True, created_at=now,
+    ),
+  ]
+
+  service = NovaService(settings)
+  storyboard = service.match_images(['line A', 'line B', 'line C'], assets)
+
+  assert storyboard[0].image_asset_id == 'img-1'
+  assert storyboard[1].image_asset_id == 'img-2'
+  assert storyboard[2].image_asset_id == 'img-1'

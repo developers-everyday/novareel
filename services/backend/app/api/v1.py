@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
+
+logger = logging.getLogger('novareel.api')
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.auth import AuthUser, get_current_user
@@ -159,7 +163,14 @@ def enqueue_generation(
 
   month = datetime.now(UTC).strftime('%Y-%m')
   usage = repo.get_usage(current_user.user_id, month, quota_limit=settings.monthly_video_quota)
-  is_exempt = current_user.email in settings.quota_exempt_emails
+  exempt_set = {e.lower() for e in settings.quota_exempt_emails}
+  is_exempt = (
+    current_user.email.lower() in exempt_set
+    or current_user.user_id in settings.quota_exempt_emails
+  )
+  logger.warning('quota check user_id=%s email=%r is_exempt=%s used=%s limit=%s',
+               current_user.user_id, current_user.email, is_exempt,
+               usage.videos_generated, settings.monthly_video_quota)
   if not is_exempt and usage.videos_generated >= settings.monthly_video_quota:
     raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail='Monthly quota exceeded')
 

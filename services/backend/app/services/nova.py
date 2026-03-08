@@ -9,29 +9,7 @@ from app.models import AssetRecord, ProjectRecord, StoryboardSegment
 import re
 
 
-def _clean_script_lines(raw: str) -> list[str]:
-  """Strip shot directions, Narrator: labels, and formatting from LLM script output."""
-  lines = []
-  for line in raw.split('\n'):
-    line = line.strip()
-    if not line:
-      continue
-    # Drop pure shot direction lines like [Opening shot...] or (scene description)
-    if re.match(r'^[\[\(]', line):
-      continue
-    # Strip inline shot directions appended to a line
-    line = re.sub(r'\[.*?\]', '', line).strip()
-    line = re.sub(r'\(.*?\)', '', line).strip()
-    # Strip "Narrator:" / "Narrator :" prefix
-    line = re.sub(r'^narrator\s*:\s*', '', line, flags=re.IGNORECASE)
-    # Strip surrounding quotes
-    line = line.strip('"\'')
-    # Strip leading bullet / number markers like "1." "- " "* "
-    line = re.sub(r'^[\d]+\.\s*', '', line)
-    line = line.strip('-* ').strip()
-    if len(line) > 5:
-      lines.append(line)
-  return lines
+# _clean_script_lines has been removed since we now rely on Converse API Tool Use for structured output.
 
 
 class NovaService:
@@ -51,25 +29,75 @@ class NovaService:
     try:
       runtime = boto3.client('bedrock-runtime', region_name=self._settings.aws_region)
       prompt = (
-        'Write exactly 6 spoken narration lines for a 30-60 second ecommerce product video. '
-        'Output ONLY the words the narrator speaks — no shot directions, no scene descriptions, '
-        'no "Narrator:" labels, no brackets, no numbering. One sentence per line. '
+        'You are an expert video director and copywriter. '
+        'Create a 6-scene marketing video script for this product. '
+        'You must use the render_video_plan tool to structure your output. '
         f'Product: {project.title}. Description: {project.product_description}'
       )
-      response = runtime.invoke_model(
-        modelId=self._settings.bedrock_model_script,
-        body=json.dumps(
+      
+      tool_config = {
+        'tools': [
           {
-            'messages': [{'role': 'user', 'content': [{'text': prompt}]}],
-            'inferenceConfig': {'maxTokens': 600, 'temperature': 0.4},
+            'toolSpec': {
+              'name': 'render_video_plan',
+              'description': 'Renders the final video plan consisting of scenes with spoken narration.',
+              'inputSchema': {
+                'json': {
+                  'type': 'object',
+                  'properties': {
+                    'scenes': {
+                      'type': 'array',
+                      'items': {
+                        'type': 'object',
+                        'properties': {
+                          'spoken_narration': {
+                            'type': 'string',
+                            'description': 'The exact words the voiceover narrator will speak. No shot directions, no narrator labels, just the spoken text.'
+                          },
+                          'visual_requirements': {
+                            'type': 'string',
+                            'description': 'A description of what should be shown on screen during this narration.'
+                          }
+                        },
+                        'required': ['spoken_narration', 'visual_requirements']
+                      },
+                      'minItems': 6,
+                      'maxItems': 6
+                    }
+                  },
+                  'required': ['scenes']
+                }
+              }
+            }
           }
-        ),
+        ],
+        'toolChoice': {
+          'tool': { 'name': 'render_video_plan' }
+        }
+      }
+
+      response = runtime.converse(
+        modelId=self._settings.bedrock_model_script,
+        messages=[{'role': 'user', 'content': [{'text': prompt}]}],
+        inferenceConfig={'maxTokens': 800, 'temperature': 0.4},
+        toolConfig=tool_config
       )
-      payload = json.loads(response['body'].read().decode('utf-8'))
-      text = payload.get('output', {}).get('message', {}).get('content', [{}])[0].get('text')
-      if isinstance(text, str) and text.strip():
-        return _clean_script_lines(text)[:6]
-    except Exception:
+      
+      # Extract the tool use from the response
+      output_message = response['output']['message']
+      for content_block in output_message['content']:
+        if 'toolUse' in content_block:
+          tool_use = content_block['toolUse']
+          if tool_use['name'] == 'render_video_plan':
+            scenes = tool_use['input']['scenes']
+            # Extract just the spoken narration for the rest of the pipeline
+            lines = [scene['spoken_narration'].strip() for scene in scenes]
+            if lines:
+              return lines
+
+    except Exception as exc:
+      import logging
+      logging.getLogger(__name__).error('Failed to generate script with Converse API: %s', exc)
       return self._mock_script(project)
 
     return self._mock_script(project)
