@@ -215,14 +215,16 @@ def test_match_images_embedding(tmp_path: Path) -> None:
   def fake_invoke_model(modelId: str, body: str) -> dict:  # noqa: N803
     payload = json.loads(body)
     call_count['n'] += 1
-    if 'inputImage' in payload:
+    
+    params = payload.get('singleEmbeddingParams', {})
+    if 'image' in params:
       # Determine which asset by inspecting the base64 content
       import base64
-      raw = base64.b64decode(payload['inputImage'])
+      raw = base64.b64decode(params['image']['source']['bytes'])
       emb = emb_image_A if raw == b'fake-image-A' else emb_image_B
     else:
       # Text embedding — match by line content
-      emb = emb_line_0 if payload['inputText'] == script_lines[0] else emb_line_1
+      emb = emb_line_0 if params.get('text', {}).get('value') == script_lines[0] else emb_line_1
 
     response_body = json.dumps({'embedding': emb}).encode('utf-8')
     return {'body': io.BytesIO(response_body)}

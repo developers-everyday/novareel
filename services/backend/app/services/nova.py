@@ -155,11 +155,28 @@ class NovaService:
         continue
       try:
         b64 = base64.b64encode(image_path.read_bytes()).decode('utf-8')
+        # Extract format without the 'image/' prefix (e.g. 'image/jpeg' -> 'jpeg')
+        # Defaults to png if for some reason content_type isn't set
+        img_fmt = (asset.content_type.split('/')[-1] if asset.content_type else 'png')
+        if img_fmt == 'jpg':
+            img_fmt = 'jpeg'
+            
+        payload = {
+            "taskType": "SINGLE_EMBEDDING",
+            "singleEmbeddingParams": {
+                "embeddingPurpose": "DOCUMENT_RETRIEVAL",
+                "image": {
+                    "format": img_fmt,
+                    "source": { "bytes": b64 }
+                }
+            }
+        }
         resp = runtime.invoke_model(
           modelId=model_id,
-          body=json.dumps({'inputImage': b64}),
+          body=json.dumps(payload),
         )
-        image_embeddings[asset.id] = json.loads(resp['body'].read())['embedding']
+        body = json.loads(resp['body'].read())
+        image_embeddings[asset.id] = body.get('embedding', [])
       except Exception as exc:
         log.warning('Failed to embed image %s: %s', asset.id, exc)
 
@@ -178,11 +195,22 @@ class NovaService:
     for index, line in enumerate(script_lines):
       chosen_asset: AssetRecord | None = None
       try:
+        payload = {
+            "taskType": "SINGLE_EMBEDDING",
+            "singleEmbeddingParams": {
+                "embeddingPurpose": "DOCUMENT_RETRIEVAL",
+                "text": {
+                    "value": line,
+                    "truncationMode": "END"
+                }
+            }
+        }
         resp = runtime.invoke_model(
           modelId=model_id,
-          body=json.dumps({'inputText': line}),
+          body=json.dumps(payload),
         )
-        line_emb: list[float] = json.loads(resp['body'].read())['embedding']
+        body = json.loads(resp['body'].read())
+        line_emb: list[float] = body.get('embedding', [])
         chosen_asset = max(
           embeddable_assets,
           key=lambda a: cosine_similarity(line_emb, image_embeddings[a.id]),
