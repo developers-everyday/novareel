@@ -25,6 +25,8 @@ services/backend/.pytest_cache/
 services/backend/dist/
 services/backend/data/*.json
 services/backend/data/*.jsonl
+services/backend/data/storage/
+services/backend/novareel_backend.egg-info/
 
 # Logs
 *.log
