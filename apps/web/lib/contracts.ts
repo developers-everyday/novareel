@@ -1,5 +1,6 @@
 export type JobStatus =
   | 'queued'
+  | 'analyzing'
   | 'scripting'
   | 'matching'
   | 'narration'
@@ -30,12 +31,17 @@ export interface GenerationJob {
   updated_at: string;
   aspect_ratio?: string;
   voice_style?: string;
+  voice_provider?: string;
+  voice_gender?: string;
+  language?: string;
+  background_music?: string;
   idempotency_key?: string | null;
   attempt_count?: number;
   max_attempts?: number;
   next_attempt_at?: string | null;
   dead_lettered?: boolean;
   dead_letter_reason?: string | null;
+  last_completed_stage?: string | null;
 }
 
 export interface VideoResult {

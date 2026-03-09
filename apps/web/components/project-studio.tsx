@@ -18,7 +18,7 @@ import {
 import type { GenerationJob, Project, UsageSummary, VideoResult } from '@/lib/contracts';
 import { JobStatusCard } from '@/components/job-status-card';
 
-const pollableStatuses = new Set<GenerationJob['status']>(['queued', 'scripting', 'matching', 'narration', 'rendering']);
+const pollableStatuses = new Set<GenerationJob['status']>(['queued', 'analyzing', 'scripting', 'matching', 'narration', 'rendering']);
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString();
@@ -31,6 +31,10 @@ export function ProjectStudio() {
   const [description, setDescription] = useState('');
   const [voiceStyle, setVoiceStyle] = useState('energetic');
   const [aspectRatio, setAspectRatio] = useState('16:9');
+  const [voiceProvider, setVoiceProvider] = useState('polly');
+  const [voiceGender, setVoiceGender] = useState('female');
+  const [language, setLanguage] = useState('en');
+  const [backgroundMusic, setBackgroundMusic] = useState('auto');
   const [brandColors, setBrandColors] = useState('#f97316,#0f172a');
   const [files, setFiles] = useState<File[]>([]);
 
@@ -175,6 +179,10 @@ export function ProjectStudio() {
         {
           aspect_ratio: aspectRatio,
           voice_style: voiceStyle,
+          voice_provider: voiceProvider,
+          voice_gender: voiceGender,
+          language: language,
+          background_music: backgroundMusic,
           idempotency_key: idempotencyKey
         },
         token
@@ -311,6 +319,81 @@ export function ProjectStudio() {
               <option value="energetic">Energetic</option>
               <option value="professional">Professional</option>
               <option value="friendly">Friendly</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="block text-sm font-medium text-slate-700">
+            Voice engine
+            <select
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              value={voiceProvider}
+              onChange={(event) => setVoiceProvider(event.target.value)}
+            >
+              <option value="polly">Amazon Polly (Default)</option>
+              <option value="edge_tts">Edge TTS (Free · 50+ languages)</option>
+              <option value="elevenlabs">ElevenLabs (Premium)</option>
+            </select>
+          </label>
+
+          <label className="block text-sm font-medium text-slate-700">
+            Voice gender
+            <select
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              value={voiceGender}
+              onChange={(event) => setVoiceGender(event.target.value)}
+            >
+              <option value="female">Female</option>
+              <option value="male">Male</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="block text-sm font-medium text-slate-700">
+            Language
+            <select
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              value={language}
+              onChange={(event) => setLanguage(event.target.value)}
+            >
+              <option value="en">English</option>
+              <option value="es">Spanish (Español)</option>
+              <option value="fr">French (Français)</option>
+              <option value="de">German (Deutsch)</option>
+              <option value="ar">Arabic (العربية)</option>
+              <option value="hi">Hindi (हिन्दी)</option>
+              <option value="ja">Japanese (日本語)</option>
+              <option value="zh">Chinese (中文)</option>
+              <option value="ko">Korean (한국어)</option>
+              <option value="pt">Portuguese (Português)</option>
+              <option value="it">Italian (Italiano)</option>
+              <option value="ru">Russian (Русский)</option>
+              <option value="tr">Turkish (Türkçe)</option>
+              <option value="nl">Dutch (Nederlands)</option>
+              <option value="pl">Polish (Polski)</option>
+              <option value="sv">Swedish (Svenska)</option>
+              <option value="th">Thai (ไทย)</option>
+              <option value="vi">Vietnamese (Tiếng Việt)</option>
+              <option value="id">Indonesian (Bahasa)</option>
+              <option value="ms">Malay (Melayu)</option>
+            </select>
+          </label>
+
+          <label className="block text-sm font-medium text-slate-700">
+            Background music
+            <select
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              value={backgroundMusic}
+              onChange={(event) => setBackgroundMusic(event.target.value)}
+            >
+              <option value="auto">Auto (match voice style)</option>
+              <option value="upbeat">Upbeat</option>
+              <option value="calm">Calm</option>
+              <option value="corporate">Corporate</option>
+              <option value="luxury">Luxury</option>
+              <option value="none">No music</option>
             </select>
           </label>
         </div>

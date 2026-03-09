@@ -105,6 +105,7 @@ class NovaService:
     self,
     project: ProjectRecord,
     image_analysis: list[dict] | None = None,
+    language: str = 'en',
   ) -> list[str]:
     if self._settings.use_mock_ai:
       return self._mock_script(project)
@@ -131,10 +132,22 @@ class NovaService:
           'Make sure every image is referenced by at least one scene.'
         )
 
+      # Feature C: Multi-language support
+      from app.config.languages import get_language_name
+
+      lang_instruction = ''
+      if language != 'en':
+        lang_name = get_language_name(language)
+        lang_instruction = (
+          f' Write ALL spoken narration text in {lang_name}. '
+          f'The narration must be entirely in {lang_name} — do not use English. '
+        )
+
       prompt = (
         'You are an expert video director and copywriter. '
         'Create a 6-scene marketing video script for this product. '
         'You must use the render_video_plan tool to structure your output. '
+        f'{lang_instruction}'
         f'Product: {project.title}. Description: {project.product_description}'
         f'{image_context}'
       )
@@ -362,32 +375,8 @@ class NovaService:
       )
     return storyboard
 
-  def synthesize_voice(self, script_lines: Sequence[str], voice_style: str) -> bytes:
-    transcript = ' '.join(script_lines)
-    if self._settings.use_mock_ai:
-      return f'MOCK-VOICE::{voice_style}::{transcript}'.encode('utf-8')
-
-    try:
-      import boto3
-    except ImportError:
-      return f'MOCK-VOICE::{voice_style}::{transcript}'.encode('utf-8')
-
-    text = transcript[:3000]
-
-    try:
-      polly = boto3.client('polly', region_name=self._settings.aws_region)
-      response = polly.synthesize_speech(
-        Text=text,
-        OutputFormat='mp3',
-        VoiceId=self._settings.polly_voice_id,
-      )
-      stream = response.get('AudioStream')
-      if stream:
-        return stream.read()
-    except Exception:
-      return f'MOCK-VOICE::{voice_style}::{transcript}'.encode('utf-8')
-
-    return f'MOCK-VOICE::{voice_style}::{transcript}'.encode('utf-8')
+  # synthesize_voice() has been removed — TTS is now handled by
+  # app.services.voice.factory.build_voice_provider()
 
   @staticmethod
   def _mock_script(project: ProjectRecord) -> list[str]:

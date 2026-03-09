@@ -61,6 +61,10 @@ class AssetUploadUrlResponse(BaseModel):
 class GenerateRequest(BaseModel):
   aspect_ratio: Literal['16:9', '1:1', '9:16'] = '16:9'
   voice_style: Literal['energetic', 'professional', 'friendly'] = 'energetic'
+  voice_provider: Literal['polly', 'edge_tts', 'elevenlabs'] = 'polly'
+  voice_gender: Literal['male', 'female'] = 'female'
+  language: str = 'en'
+  background_music: Literal['none', 'auto', 'upbeat', 'calm', 'corporate', 'luxury'] = 'auto'
   idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
 
 
@@ -77,6 +81,11 @@ class GenerationJobRecord(BaseModel):
   updated_at: datetime
   aspect_ratio: str = '16:9'
   voice_style: str = 'energetic'
+  voice_provider: str = 'polly'
+  voice_gender: str = 'female'
+  language: str = 'en'
+  background_music: str = 'auto'
+  last_completed_stage: str | None = None
   idempotency_key: str | None = None
   attempt_count: int = 0
   max_attempts: int = 3

@@ -59,6 +59,10 @@ class Repository(ABC):
     owner_id: str,
     aspect_ratio: str,
     voice_style: str,
+    voice_provider: str = 'polly',
+    voice_gender: str = 'female',
+    language: str = 'en',
+    background_music: str = 'auto',
     max_attempts: int = 3,
     idempotency_key: str | None = None,
   ) -> GenerationJobRecord:

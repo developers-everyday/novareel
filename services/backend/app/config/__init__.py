@@ -38,6 +38,7 @@ class Settings(BaseSettings):
   bedrock_model_embeddings: str = 'amazon.nova-2-multimodal-embeddings-v1:0'
   bedrock_model_voice: str = 'amazon.nova-sonic-v1:0'
   polly_voice_id: str = 'Joanna'
+  elevenlabs_api_key: str | None = None
   use_mock_ai: bool = True
 
   cors_origins: list[str] = ['http://localhost:3000']

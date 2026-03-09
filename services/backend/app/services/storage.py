@@ -29,6 +29,18 @@ class StorageService(ABC):
   def get_public_url(self, object_key: str) -> str:
     raise NotImplementedError
 
+  def load_text(self, key: str) -> str | None:
+    """Load text content by key, return None if not found."""
+    return None
+
+  def exists(self, key: str) -> bool:
+    """Check if a key exists in storage."""
+    return False
+
+  def delete_prefix(self, prefix: str) -> None:
+    """Delete all objects with the given prefix."""
+    pass
+
 
 class LocalStorageService(StorageService):
   def __init__(self, settings: Settings):
@@ -76,6 +88,33 @@ class LocalStorageService(StorageService):
   def get_public_url(self, object_key: str) -> str:
     encoded = quote(object_key)
     return f"{self._settings.public_api_base_url.rstrip('/')}/files/{encoded}"
+
+  def load_text(self, key: str) -> str | None:
+    try:
+      path = self._resolve_object_path(key)
+      if path.exists():
+        return path.read_text(encoding='utf-8')
+    except (ValueError, OSError):
+      pass
+    return None
+
+  def exists(self, key: str) -> bool:
+    try:
+      path = self._resolve_object_path(key)
+      return path.exists() and path.stat().st_size > 0
+    except (ValueError, OSError):
+      return False
+
+  def delete_prefix(self, prefix: str) -> None:
+    import shutil
+    try:
+      target_dir = (self._root / prefix).resolve()
+      if target_dir.exists() and target_dir.is_dir():
+        shutil.rmtree(target_dir)
+      elif target_dir.exists():
+        target_dir.unlink()
+    except (ValueError, OSError):
+      pass
 
 
 class S3StorageService(StorageService):

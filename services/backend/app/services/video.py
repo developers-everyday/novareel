@@ -44,6 +44,7 @@ class VideoService:
     aspect_ratio: str,
     storyboard: list[StoryboardSegment],
     storage: StorageService,
+    music_path: 'Path | None' = None,
   ) -> tuple[str, float, str, str | None]:
     resolution, duration_sec = self._resolution_for(aspect_ratio)
     width, height = resolution.split('x')
@@ -174,6 +175,25 @@ class VideoService:
           final_video = muxed
         else:
           logger.warning('Audio mux failed, using video-only output')
+
+      # ── Mix background music ──────────────────────────────────────────────────
+      if music_path and music_path.exists() and final_video != concat_video:
+        music_muxed = temp_root / 'music_muxed.mp4'
+        music_cmd = [
+          ffmpeg_path, '-y',
+          '-i', str(final_video),
+          '-i', str(music_path),
+          '-filter_complex',
+          '[1:a]aloop=loop=-1:size=2e+09,volume=0.12[bg];[0:a][bg]amix=inputs=2:duration=first',
+          '-c:v', 'copy', '-c:a', 'aac',
+          str(music_muxed),
+        ]
+        music_result = subprocess.run(music_cmd, check=False, capture_output=True)
+        if music_result.returncode == 0 and music_muxed.exists():
+          final_video = music_muxed
+          logger.info('Background music mixed successfully')
+        else:
+          logger.warning('Music mux failed, using narration-only audio')
 
       # ── Thumbnail ────────────────────────────────────────────────────────────
       thumb_cmd = [

@@ -81,7 +81,15 @@ export async function uploadAsset(uploadUrl: string, file: File, headers: Record
 
 export async function generateProject(
   projectId: string,
-  input: { aspect_ratio: string; voice_style: string; idempotency_key?: string },
+  input: {
+    aspect_ratio: string;
+    voice_style: string;
+    voice_provider: string;
+    voice_gender: string;
+    language: string;
+    background_music: string;
+    idempotency_key?: string;
+  },
   token?: string | null
 ): Promise<GenerationJob> {
   return apiRequest<GenerationJob>(`/v1/projects/${projectId}/generate`, {

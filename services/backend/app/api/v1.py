@@ -195,6 +195,10 @@ def enqueue_generation(
     owner_id=current_user.user_id,
     aspect_ratio=payload.aspect_ratio,
     voice_style=payload.voice_style,
+    voice_provider=payload.voice_provider,
+    voice_gender=payload.voice_gender,
+    language=payload.language,
+    background_music=payload.background_music,
     max_attempts=settings.worker_max_attempts,
     idempotency_key=payload.idempotency_key,
   )
@@ -204,7 +208,12 @@ def enqueue_generation(
     event_name='generation_requested',
     project_id=project_id,
     job_id=queued_job.id,
-    properties={'aspect_ratio': payload.aspect_ratio, 'voice_style': payload.voice_style},
+    properties={
+      'aspect_ratio': payload.aspect_ratio,
+      'voice_style': payload.voice_style,
+      'voice_provider': payload.voice_provider,
+      'language': payload.language,
+    },
   )
   return queued_job
 

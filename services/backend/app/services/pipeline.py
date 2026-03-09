@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from datetime import UTC, datetime
 
-from app.models import GenerationJobRecord, JobStatus, VideoResultRecord
+from app.models import GenerationJobRecord, JobStatus, StoryboardSegment, VideoResultRecord
 from app.repositories.base import Repository
 from app.services.nova import NovaService
 from app.services.storage import StorageService
@@ -53,55 +54,81 @@ def process_generation_job(
     if not assets:
       raise ValueError('no_uploaded_assets')
 
-    # Phase 1 — Analyze images using Nova Vision
-    repo.update_job(job.id, status=JobStatus.ANALYZING, stage=JobStatus.ANALYZING, progress_pct=10)
-    phase_start = time.perf_counter()
-    image_analysis = nova.analyze_images(assets)
-    timings['analyzing_sec'] = round(time.perf_counter() - phase_start, 3)
+    # Intermediate artifact prefix for resumable pipeline (Feature D)
+    prefix = f'projects/{project.id}/intermediate/{job.id}'
 
-    # Phase 2 — Generate image-aware script
-    repo.update_job(job.id, status=JobStatus.SCRIPTING, stage=JobStatus.SCRIPTING, progress_pct=25)
-    phase_start = time.perf_counter()
-    script_lines = nova.generate_script(project, image_analysis=image_analysis)
-    timings['scripting_sec'] = round(time.perf_counter() - phase_start, 3)
+    # ── ANALYZING ──────────────────────────────────────────────────
+    existing_analysis = storage.load_text(f'{prefix}/image_analysis.json')
+    if existing_analysis:
+      image_analysis = json.loads(existing_analysis)
+      logger.info('Resuming: skipped ANALYZING (cached)')
+    else:
+      repo.update_job(job.id, status=JobStatus.ANALYZING, stage=JobStatus.ANALYZING, progress_pct=10)
+      phase_start = time.perf_counter()
+      image_analysis = nova.analyze_images(assets)
+      storage.store_text(f'{prefix}/image_analysis.json', json.dumps(image_analysis))
+      timings['analyzing_sec'] = round(time.perf_counter() - phase_start, 3)
 
-    repo.update_job(
-      job.id,
-      status=JobStatus.MATCHING,
-      stage=JobStatus.MATCHING,
-      progress_pct=45,
-      timings=timings,
-    )
-    phase_start = time.perf_counter()
-    storyboard = nova.match_images(script_lines, assets)
-    timings['matching_sec'] = round(time.perf_counter() - phase_start, 3)
+    # ── SCRIPTING ──────────────────────────────────────────────────
+    existing_script = storage.load_text(f'{prefix}/script_lines.json')
+    if existing_script:
+      script_lines = json.loads(existing_script)
+      logger.info('Resuming: skipped SCRIPTING (cached)')
+    else:
+      repo.update_job(job.id, status=JobStatus.SCRIPTING, stage=JobStatus.SCRIPTING, progress_pct=25)
+      phase_start = time.perf_counter()
+      script_lines = nova.generate_script(project, image_analysis=image_analysis, language=job.language)
+      storage.store_text(f'{prefix}/script_lines.json', json.dumps(script_lines))
+      timings['scripting_sec'] = round(time.perf_counter() - phase_start, 3)
 
-    repo.update_job(
-      job.id,
-      status=JobStatus.NARRATION,
-      stage=JobStatus.NARRATION,
-      progress_pct=70,
-      timings=timings,
-    )
-    phase_start = time.perf_counter()
+    # ── MATCHING ───────────────────────────────────────────────────
+    existing_storyboard = storage.load_text(f'{prefix}/storyboard.json')
+    if existing_storyboard:
+      storyboard = [StoryboardSegment(**s) for s in json.loads(existing_storyboard)]
+      logger.info('Resuming: skipped MATCHING (cached)')
+    else:
+      repo.update_job(job.id, status=JobStatus.MATCHING, stage=JobStatus.MATCHING, progress_pct=45, timings=timings)
+      phase_start = time.perf_counter()
+      storyboard = nova.match_images(script_lines, assets)
+      storage.store_text(f'{prefix}/storyboard.json', json.dumps([s.model_dump() for s in storyboard]))
+      timings['matching_sec'] = round(time.perf_counter() - phase_start, 3)
+
+    # ── NARRATION ──────────────────────────────────────────────────
     transcript = '\n'.join(script_lines)
     transcript_key = f'projects/{project.id}/outputs/{job.id}.txt'
-    storage.store_text(transcript_key, transcript)
+    audio_key = f'projects/{project.id}/outputs/{job.id}.mp3'
+
+    if storage.exists(audio_key):
+      logger.info('Resuming: skipped NARRATION (cached)')
+    else:
+      repo.update_job(job.id, status=JobStatus.NARRATION, stage=JobStatus.NARRATION, progress_pct=70, timings=timings)
+      phase_start = time.perf_counter()
+
+      storage.store_text(transcript_key, transcript)
+
+      # Feature A: Multi-provider TTS
+      from app.config import get_settings
+      from app.services.voice.factory import build_voice_provider
+
+      settings = get_settings()
+      if settings.use_mock_ai:
+        audio_payload = f'MOCK-VOICE::{job.voice_provider}::{job.voice_gender}::{transcript}'.encode()
+      else:
+        provider = build_voice_provider(job.voice_provider, settings)
+        audio_payload = provider.synthesize(transcript[:3000], voice_gender=job.voice_gender, language=job.language)
+
+      storage.store_bytes(audio_key, audio_payload, content_type='audio/mpeg')
+      timings['narration_sec'] = round(time.perf_counter() - phase_start, 3)
+
     transcript_url = storage.get_public_url(transcript_key)
 
-    audio_key = f'projects/{project.id}/outputs/{job.id}.mp3'
-    audio_payload = nova.synthesize_voice(script_lines, job.voice_style)
-    storage.store_bytes(audio_key, audio_payload, content_type='audio/mpeg')
-    timings['narration_sec'] = round(time.perf_counter() - phase_start, 3)
-
-    repo.update_job(
-      job.id,
-      status=JobStatus.RENDERING,
-      stage=JobStatus.RENDERING,
-      progress_pct=90,
-      timings=timings,
-    )
+    # ── RENDERING (always re-run) ─────────────────────────────────
+    repo.update_job(job.id, status=JobStatus.RENDERING, stage=JobStatus.RENDERING, progress_pct=90, timings=timings)
     phase_start = time.perf_counter()
+
+    # Feature B: Background music
+    from app.services.music import select_music_path
+    music_path = select_music_path(job.background_music, job.voice_style)
 
     video_key, duration_sec, resolution, thumbnail_key = video_service.render_video(
       project=project,
@@ -109,6 +136,7 @@ def process_generation_job(
       aspect_ratio=job.aspect_ratio,
       storyboard=storyboard,
       storage=storage,
+      music_path=music_path,
     )
     subtitle_key = f'projects/{project.id}/outputs/{job.id}.srt'
     storage.store_text(subtitle_key, _build_srt(storyboard))
@@ -143,6 +171,9 @@ def process_generation_job(
         'resolution': resolution,
       },
     )
+
+    # Feature D: Cleanup intermediate artifacts on success
+    storage.delete_prefix(f'{prefix}/')
 
     timings['total_sec'] = round(time.perf_counter() - started, 3)
     repo.update_job(
