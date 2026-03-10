@@ -37,6 +37,7 @@ export function ProjectStudio() {
   const [language, setLanguage] = useState('en');
   const [backgroundMusic, setBackgroundMusic] = useState('auto');
   const [scriptTemplate, setScriptTemplate] = useState('product_showcase');
+  const [videoStyle, setVideoStyle] = useState('product_only');
   const [captionStyle, setCaptionStyle] = useState('none');
   const [transitionStyle, setTransitionStyle] = useState('none');
   const [showTitleCard, setShowTitleCard] = useState(false);
@@ -198,6 +199,7 @@ export function ProjectStudio() {
           background_music: backgroundMusic,
           idempotency_key: idempotencyKey,
           script_template: scriptTemplate,
+          video_style: videoStyle,
           caption_style: captionStyle,
           transition_style: transitionStyle,
           show_title_card: showTitleCard,
@@ -465,6 +467,19 @@ export function ProjectStudio() {
               <option value="how_to">How-To / Tutorial</option>
               <option value="seasonal">Seasonal Promotion</option>
               <option value="luxury">Luxury / Premium</option>
+            </select>
+          </label>
+
+          <label className="block text-sm font-medium text-slate-700">
+            Video style
+            <select
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              value={videoStyle}
+              onChange={(event) => setVideoStyle(event.target.value)}
+            >
+              <option value="product_only">Product Images Only (Default)</option>
+              <option value="product_lifestyle">Product + Lifestyle B-Roll</option>
+              <option value="lifestyle_focus">Lifestyle-Focused</option>
             </select>
           </label>
         </div>

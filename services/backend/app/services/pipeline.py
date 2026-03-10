@@ -36,6 +36,128 @@ def _build_srt(storyboard) -> str:
   return '\n'.join(rows)
 
 
+def _fetch_stock_footage(
+  *,
+  storyboard: list[StoryboardSegment],
+  script_lines: list[str],
+  product_description: str,
+  aspect_ratio: str,
+  video_style: str,
+  storage: StorageService,
+  project_id: str,
+  job_id: str,
+) -> list[StoryboardSegment]:
+  """Fetch stock footage clips and interleave with product images.
+
+  Args:
+    storyboard: Original storyboard with product images
+    script_lines: Script lines for search query generation
+    product_description: Product description for context
+    aspect_ratio: Video aspect ratio (16:9, 1:1, 9:16)
+    video_style: 'product_lifestyle' or 'lifestyle_focus'
+    storage: Storage service for downloading clips
+    project_id: Project ID for storage paths
+    job_id: Job ID for storage paths
+
+  Returns:
+    Updated storyboard with B-roll segments interleaved
+  """
+  from app.config import get_settings
+  from app.services.stock_media import (
+    StockMediaService,
+    generate_search_queries,
+    get_orientation_for_aspect_ratio,
+  )
+
+  settings = get_settings()
+
+  # Check if Pexels API key is configured
+  if not settings.pexels_api_key:
+    logger.warning('Pexels API key not configured, falling back to product_only style')
+    return storyboard
+
+  # Initialize stock media service with cache
+  cache_dir = settings.local_data_dir / 'cache' / 'pexels'
+  stock_service = StockMediaService(settings.pexels_api_key, cache_dir=cache_dir)
+
+  # Generate search queries using LLM
+  if settings.use_mock_ai:
+    search_queries = generate_search_queries(
+      script_lines, product_description, None, '', use_mock=True,
+    )
+  else:
+    import boto3
+    bedrock_client = boto3.client('bedrock-runtime', region_name=settings.aws_region)
+    search_queries = generate_search_queries(
+      script_lines, product_description, bedrock_client,
+      settings.bedrock_model_script, use_mock=False,
+    )
+
+  # Determine orientation from aspect ratio
+  orientation = get_orientation_for_aspect_ratio(aspect_ratio)
+
+  # Fetch and download clips
+  storage_root = settings.local_data_dir / settings.local_storage_dir
+  clips_dir = storage_root / 'projects' / project_id / 'clips' / job_id
+  clips_dir.mkdir(parents=True, exist_ok=True)
+
+  downloaded_clips: list[tuple[int, Path, float]] = []  # (scene_index, path, duration)
+
+  for i, query in enumerate(search_queries):
+    # For product_lifestyle: alternate (every other scene gets B-roll)
+    # For lifestyle_focus: most scenes get B-roll
+    if video_style == 'product_lifestyle' and i % 2 == 0:
+      continue  # Keep product image for even scenes
+    elif video_style == 'lifestyle_focus' and i == 0:
+      continue  # Keep first scene as product image
+
+    results = stock_service.search_videos(query, orientation=orientation)
+    if not results:
+      logger.warning('No stock footage found for query: %s', query)
+      continue
+
+    # Pick the first result
+    clip_info = results[0]
+    clip_path = clips_dir / f'broll_{i:03d}.mp4'
+
+    if settings.use_mock_ai:
+      # Create a placeholder file for mock mode
+      clip_path.write_bytes(b'MOCK_VIDEO_PLACEHOLDER')
+      downloaded_clips.append((i, clip_path, min(clip_info.get('duration', 5), 5)))
+    else:
+      downloaded = stock_service.download_clip(clip_info['url'], clip_path)
+      if downloaded:
+        downloaded_clips.append((i, clip_path, min(clip_info['duration'], 5)))
+
+  # Update storyboard with B-roll segments
+  if not downloaded_clips:
+    logger.info('No B-roll clips downloaded, keeping original storyboard')
+    return storyboard
+
+  updated_storyboard: list[StoryboardSegment] = []
+  clip_map = {idx: (path, dur) for idx, path, dur in downloaded_clips}
+
+  for segment in storyboard:
+    if segment.order in clip_map:
+      clip_path, clip_duration = clip_map[segment.order]
+      # Replace with video segment
+      updated_storyboard.append(StoryboardSegment(
+        order=segment.order,
+        script_line=segment.script_line,
+        image_asset_id=segment.image_asset_id,  # Keep reference for fallback
+        start_sec=segment.start_sec,
+        duration_sec=min(segment.duration_sec, clip_duration),
+        media_type='video',
+        video_path=str(clip_path),
+      ))
+    else:
+      # Keep original image segment
+      updated_storyboard.append(segment)
+
+  logger.info('Updated storyboard with %d B-roll clips', len(downloaded_clips))
+  return updated_storyboard
+
+
 def process_generation_job(
   *,
   repo: Repository,
@@ -94,6 +216,19 @@ def process_generation_job(
       storyboard = nova.match_images(script_lines, assets)
       storage.store_text(f'{prefix}/storyboard.json', json.dumps([s.model_dump() for s in storyboard]))
       timings['matching_sec'] = round(time.perf_counter() - phase_start, 3)
+
+    # ── STOCK FOOTAGE (Feature C) ─────────────────────────────────
+    if job.video_style and job.video_style != 'product_only':
+      storyboard = _fetch_stock_footage(
+        storyboard=storyboard,
+        script_lines=script_lines,
+        product_description=project.product_description,
+        aspect_ratio=job.aspect_ratio,
+        video_style=job.video_style,
+        storage=storage,
+        project_id=project.id,
+        job_id=job.id,
+      )
 
     # ── NARRATION ──────────────────────────────────────────────────
     transcript = '\n'.join(script_lines)

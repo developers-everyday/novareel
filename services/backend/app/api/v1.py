@@ -176,6 +176,14 @@ def enqueue_generation(
   if not is_exempt and usage.videos_generated >= settings.monthly_video_quota:
     raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail='Monthly quota exceeded')
 
+  # Validate Pexels API key for stock footage styles
+  if payload.video_style and payload.video_style != 'product_only':
+    if not settings.pexels_api_key:
+      raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=f"Stock footage style '{payload.video_style}' requires Pexels API key. Configure NOVAREEL_PEXELS_API_KEY or use 'product_only' style.",
+      )
+
   if payload.idempotency_key:
     existing_job = repo.find_job_by_idempotency(
       owner_id=current_user.user_id,

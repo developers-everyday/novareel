@@ -54,6 +54,7 @@ class Settings(BaseSettings):
   prompt_templates_dir: str = Field(default_factory=lambda: str(Path(__file__).resolve().parents[2] / 'prompt_templates'))
   transcription_backend: str = 'mock'  # 'aws_transcribe', 'whisper', or 'mock'
   whisper_model: str = 'base'
+  pexels_api_key: str | None = None
 
 
 @lru_cache

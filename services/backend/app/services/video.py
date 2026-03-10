@@ -106,9 +106,52 @@ class VideoService:
       for idx, segment in enumerate(storyboard):
         seg_video = temp_root / f'seg_{idx:03d}.mp4'
         seg_duration = segment.duration_sec
-        asset_path = self._resolve_asset_path(segment.image_asset_id, project.id)
         fps = 24
         total_frames = int(fps * seg_duration)
+
+        # Check if this is a video segment (B-roll) or image segment
+        if segment.media_type == 'video' and segment.video_path:
+          # ── VIDEO SEGMENT (B-roll from stock footage) ──
+          broll_path = Path(segment.video_path)
+          if broll_path.exists() and broll_path.stat().st_size > 100:
+            # Scale and trim the video clip to match target resolution and duration
+            vf = f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1'
+
+            # Add burned-in subtitles if not using ASS
+            if has_drawtext and segment.script_line and not ass_subtitle_path:
+              escaped_text = segment.script_line.replace("'", "\u2019").replace(":", "\\:")
+              vf += (
+                f",drawtext=text='{escaped_text}'"
+                f":fontsize=36:fontcolor=white:borderw=3:bordercolor=black"
+                f":x=(w-text_w)/2:y=h-80"
+              )
+
+            cmd = [
+              ffmpeg_path, '-y',
+              '-i', str(broll_path),
+              '-vf', vf,
+              '-t', str(seg_duration),
+              '-c:v', 'libx264',
+              '-preset', 'fast',
+              '-pix_fmt', 'yuv420p',
+              '-an',  # Remove audio from B-roll (we use narration)
+              '-r', str(fps),
+              str(seg_video),
+            ]
+
+            result = subprocess.run(cmd, check=False, capture_output=True)
+            if result.returncode != 0:
+              err = result.stderr.decode('utf-8', errors='replace')
+              logger.warning('ffmpeg video segment %d failed: %s', idx, err[-300:])
+              # Fall back to image rendering for this segment
+              segment = segment.model_copy(update={'media_type': 'image', 'video_path': None})
+            else:
+              seg_paths.append(seg_video)
+              seg_durations.append(seg_duration)
+              continue  # Skip to next segment
+
+        # ── IMAGE SEGMENT (product images with Ken Burns) ──
+        asset_path = self._resolve_asset_path(segment.image_asset_id, project.id)
 
         if asset_path and asset_path.exists():
           # --- Ken Burns effect: alternate zoom-in / zoom-out ---
