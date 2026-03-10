@@ -89,6 +89,13 @@ export async function generateProject(
     language: string;
     background_music: string;
     idempotency_key?: string;
+    // Phase 2
+    script_template?: string;
+    video_style?: string;
+    transition_style?: string;
+    caption_style?: string;
+    show_title_card?: boolean;
+    cta_text?: string;
   },
   token?: string | null
 ): Promise<GenerationJob> {
@@ -102,8 +109,29 @@ export async function getJob(jobId: string, token?: string | null): Promise<Gene
   return apiRequest<GenerationJob>(`/v1/jobs/${jobId}`, {}, token);
 }
 
-export async function getProjectResult(projectId: string, token?: string | null): Promise<VideoResult> {
-  return apiRequest<VideoResult>(`/v1/projects/${projectId}/result`, {}, token);
+export async function getProjectResult(projectId: string, jobId?: string, token?: string | null): Promise<VideoResult> {
+  const query = jobId ? `?job_id=${encodeURIComponent(jobId)}` : '';
+  return apiRequest<VideoResult>(`/v1/projects/${projectId}/result${query}`, {}, token);
+}
+
+export async function getProjectResults(projectId: string, token?: string | null): Promise<VideoResult[]> {
+  return apiRequest<VideoResult[]>(`/v1/projects/${projectId}/results`, {}, token);
+}
+
+export async function translateProject(
+  projectId: string,
+  jobId: string,
+  input: {
+    target_languages: string[];
+    voice_provider?: string;
+    voice_gender?: string;
+  },
+  token?: string | null
+): Promise<GenerationJob[]> {
+  return apiRequest<GenerationJob[]>(`/v1/projects/${projectId}/jobs/${jobId}/translate`, {
+    method: 'POST',
+    body: JSON.stringify(input)
+  }, token);
 }
 
 export async function getUsage(token?: string | null): Promise<UsageSummary> {

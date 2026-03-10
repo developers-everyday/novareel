@@ -106,6 +106,7 @@ class NovaService:
     project: ProjectRecord,
     image_analysis: list[dict] | None = None,
     language: str = 'en',
+    script_template: str = 'product_showcase',
   ) -> list[str]:
     if self._settings.use_mock_ai:
       return self._mock_script(project)
@@ -117,6 +118,9 @@ class NovaService:
 
     try:
       runtime = boto3.client('bedrock-runtime', region_name=self._settings.aws_region)
+
+      # Load template system prompt
+      template_prompt = self._load_template_prompt(script_template)
 
       # Build image context from analysis results
       image_context = ''
@@ -143,14 +147,23 @@ class NovaService:
           f'The narration must be entirely in {lang_name} — do not use English. '
         )
 
-      prompt = (
-        'You are an expert video director and copywriter. '
-        'Create a 6-scene marketing video script for this product. '
-        'You must use the render_video_plan tool to structure your output. '
-        f'{lang_instruction}'
-        f'Product: {project.title}. Description: {project.product_description}'
-        f'{image_context}'
-      )
+      if template_prompt:
+        prompt = (
+          f'{template_prompt}\n\n'
+          'You must use the render_video_plan tool to structure your output. '
+          f'{lang_instruction}'
+          f'Product: {project.title}. Description: {project.product_description}'
+          f'{image_context}'
+        )
+      else:
+        prompt = (
+          'You are an expert video director and copywriter. '
+          'Create a 6-scene marketing video script for this product. '
+          'You must use the render_video_plan tool to structure your output. '
+          f'{lang_instruction}'
+          f'Product: {project.title}. Description: {project.product_description}'
+          f'{image_context}'
+        )
       
       tool_config = {
         'tools': [
@@ -218,6 +231,25 @@ class NovaService:
       return self._mock_script(project)
 
     return self._mock_script(project)
+
+  def _load_template_prompt(self, template_name: str) -> str | None:
+    """Load a YAML template's system_prompt by name. Returns None if not found."""
+    from pathlib import Path
+    templates_dir = Path(self._settings.prompt_templates_dir)
+    template_path = templates_dir / f'{template_name}.yaml'
+    if not template_path.exists():
+      import logging
+      logging.getLogger(__name__).warning('Template %s not found at %s, using default', template_name, template_path)
+      return None
+    try:
+      import yaml
+      with open(template_path) as f:
+        data = yaml.safe_load(f)
+      return data.get('system_prompt', '').strip() or None
+    except Exception:
+      import logging
+      logging.getLogger(__name__).warning('Failed to load template %s', template_name, exc_info=True)
+      return None
 
   def match_images(self, script_lines: Sequence[str], assets: Sequence[AssetRecord]) -> list[StoryboardSegment]:
     if not assets:

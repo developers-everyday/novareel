@@ -5,10 +5,11 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from app.config import Settings, get_settings
-from app.dependencies import get_nova_service, get_queue, get_repository, get_storage, get_video_service
+from app.dependencies import get_nova_service, get_queue, get_repository, get_storage, get_translation_service, get_video_service
 from app.models import JobStatus
 from app.queue.base import JobQueue
 from app.services.pipeline import process_generation_job
+from app.services.pipeline_translate import process_translation_job
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger('novareel.worker')
@@ -29,7 +30,18 @@ def process_job_by_id(job_id: str, *, queue: JobQueue, settings: Settings) -> bo
   if not claimed:
     return False
 
-  process_generation_job(repo=repo, storage=storage, nova=nova, video_service=video_service, job=claimed)
+  # Route based on job_type
+  if claimed.job_type == 'translation':
+    translation_service = get_translation_service()
+    process_translation_job(
+      repo=repo,
+      storage=storage,
+      translation_service=translation_service,
+      video_service=video_service,
+      job=claimed,
+    )
+  else:
+    process_generation_job(repo=repo, storage=storage, nova=nova, video_service=video_service, job=claimed)
 
   final = repo.get_job(job_id)
   if not final:

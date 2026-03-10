@@ -77,7 +77,7 @@ def process_generation_job(
     else:
       repo.update_job(job.id, status=JobStatus.SCRIPTING, stage=JobStatus.SCRIPTING, progress_pct=25)
       phase_start = time.perf_counter()
-      script_lines = nova.generate_script(project, image_analysis=image_analysis, language=job.language)
+      script_lines = nova.generate_script(project, image_analysis=image_analysis, language=job.language, script_template=job.script_template)
       storage.store_text(f'{prefix}/script_lines.json', json.dumps(script_lines))
       timings['scripting_sec'] = round(time.perf_counter() - phase_start, 3)
 
@@ -145,6 +145,7 @@ def process_generation_job(
 
     result = VideoResultRecord(
       project_id=project.id,
+      job_id=job.id,
       video_s3_key=video_key,
       video_url=storage.get_public_url(video_key),
       duration_sec=duration_sec,
@@ -155,10 +156,12 @@ def process_generation_job(
       subtitle_key=subtitle_key,
       subtitle_url=storage.get_public_url(subtitle_key),
       storyboard=storyboard,
+      script_lines=script_lines,
+      language=job.language,
       completed_at=datetime.now(UTC),
     )
 
-    repo.set_result(project.id, result)
+    repo.set_result(project.id, job.id, result)
     month = datetime.now(UTC).strftime('%Y-%m')
     repo.increment_usage(project.owner_id, month)
     repo.record_analytics_event(

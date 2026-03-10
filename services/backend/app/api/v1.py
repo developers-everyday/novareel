@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.auth import AuthUser, get_current_user
 from app.config import Settings, get_settings
-from app.dependencies import get_nova_service, get_queue, get_repository, get_storage, get_video_service
+from app.dependencies import get_nova_service, get_queue, get_repository, get_storage, get_translation_service, get_video_service
 from app.models import (
   AdminOverview,
   AnalyticsEventRecord,
@@ -17,9 +17,11 @@ from app.models import (
   AssetUploadRequest,
   GenerateRequest,
   GenerationJobRecord,
+  JobCreateParams,
   JobStatus,
   ProjectCreateRequest,
   ProjectRecord,
+  TranslateRequest,
   UsageSummary,
   VideoResultRecord,
 )
@@ -190,17 +192,26 @@ def enqueue_generation(
       )
       return existing_job
 
-  queued_job = repo.create_job(
-    project_id=project_id,
-    owner_id=current_user.user_id,
+  params = JobCreateParams(
     aspect_ratio=payload.aspect_ratio,
     voice_style=payload.voice_style,
     voice_provider=payload.voice_provider,
     voice_gender=payload.voice_gender,
     language=payload.language,
     background_music=payload.background_music,
-    max_attempts=settings.worker_max_attempts,
     idempotency_key=payload.idempotency_key,
+    max_attempts=settings.worker_max_attempts,
+    script_template=payload.script_template,
+    video_style=payload.video_style,
+    transition_style=payload.transition_style,
+    caption_style=payload.caption_style,
+    show_title_card=payload.show_title_card,
+    cta_text=payload.cta_text,
+  )
+  queued_job = repo.create_job(
+    project_id=project_id,
+    owner_id=current_user.user_id,
+    params=params,
   )
   queue.enqueue(queued_job.id)
   repo.record_analytics_event(
@@ -249,6 +260,7 @@ def get_job_status(
 @router.get('/projects/{project_id}/result', response_model=VideoResultRecord)
 def get_result(
   project_id: str,
+  job_id: str | None = None,
   current_user: AuthUser = Depends(get_current_user),
   repo: Repository = Depends(get_repository),
 ) -> VideoResultRecord:
@@ -258,11 +270,101 @@ def get_result(
 
   _require_owner(project.owner_id, current_user)
 
-  result = repo.get_result(project_id)
+  result = repo.get_result(project_id, job_id=job_id)
   if not result:
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Result not available yet')
 
   return result
+
+
+@router.get('/projects/{project_id}/results', response_model=list[VideoResultRecord])
+def list_results(
+  project_id: str,
+  current_user: AuthUser = Depends(get_current_user),
+  repo: Repository = Depends(get_repository),
+) -> list[VideoResultRecord]:
+  project = repo.get_project(project_id)
+  if not project:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Project not found')
+
+  _require_owner(project.owner_id, current_user)
+  return repo.list_results(project_id)
+
+
+@router.post(
+  '/projects/{project_id}/jobs/{job_id}/translate',
+  response_model=list[GenerationJobRecord],
+  status_code=status.HTTP_202_ACCEPTED,
+)
+def translate_video(
+  project_id: str,
+  job_id: str,
+  payload: TranslateRequest,
+  current_user: AuthUser = Depends(get_current_user),
+  repo: Repository = Depends(get_repository),
+  queue: JobQueue = Depends(get_queue),
+  settings: Settings = Depends(get_settings),
+) -> list[GenerationJobRecord]:
+  """Create translation jobs for a completed video."""
+  project = repo.get_project(project_id)
+  if not project:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Project not found')
+
+  _require_owner(project.owner_id, current_user)
+
+  source_job = repo.get_job(job_id)
+  if not source_job:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Source job not found')
+  if source_job.status != JobStatus.COMPLETED:
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Source job must be completed before translating')
+
+  # Verify source result exists with script_lines
+  source_result = repo.get_result(project_id, job_id=job_id)
+  if not source_result or not source_result.script_lines:
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Source video result not found or missing script data')
+
+  if not payload.target_languages:
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='At least one target language is required')
+
+  translation_jobs: list[GenerationJobRecord] = []
+  for lang in payload.target_languages:
+    params = JobCreateParams(
+      aspect_ratio=source_job.aspect_ratio,
+      voice_style=source_job.voice_style,
+      voice_provider=payload.voice_provider,
+      voice_gender=payload.voice_gender,
+      language=lang,
+      background_music=source_job.background_music,
+      max_attempts=settings.worker_max_attempts,
+      script_template=source_job.script_template,
+      video_style=source_job.video_style,
+      transition_style=source_job.transition_style,
+      caption_style=source_job.caption_style,
+      show_title_card=source_job.show_title_card,
+      cta_text=source_job.cta_text,
+      job_type='translation',
+      source_job_id=job_id,
+    )
+    new_job = repo.create_job(
+      project_id=project_id,
+      owner_id=current_user.user_id,
+      params=params,
+    )
+    queue.enqueue(new_job.id)
+    translation_jobs.append(new_job)
+
+  repo.record_analytics_event(
+    owner_id=current_user.user_id,
+    event_name='translation_requested',
+    project_id=project_id,
+    job_id=job_id,
+    properties={
+      'target_languages': payload.target_languages,
+      'voice_provider': payload.voice_provider,
+      'jobs_created': len(translation_jobs),
+    },
+  )
+  return translation_jobs
 
 
 @router.get('/usage', response_model=UsageSummary)

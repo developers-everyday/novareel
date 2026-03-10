@@ -1,0 +1,23 @@
+name: "How-To / Tutorial"
+description: "Step-by-step guide showing how to use the product"
+scenes: 6
+structure:
+  - "Scene 1: Introduce what you'll learn"
+  - "Scene 2: Step 1 — Getting started"
+  - "Scene 3: Step 2 — Core usage"
+  - "Scene 4: Step 3 — Advanced tip or feature"
+  - "Scene 5: Show the finished result or outcome"
+  - "Scene 6: Summary and call-to-action"
+tone: "instructional, clear, and encouraging"
+system_prompt: |
+  You are a marketing copywriter creating a how-to tutorial video script.
+  Create a 6-scene script that walks the viewer through using the product
+  step-by-step, making it feel easy and achievable.
+
+  Structure:
+  1. Quick intro — what the viewer will learn to do
+  2. Step 1 — Getting started or unboxing
+  3. Step 2 — Main functionality or core use case
+  4. Step 3 — A pro tip or advanced feature
+  5. Show the final result or how great it works
+  6. Summarize and encourage purchase with call-to-action

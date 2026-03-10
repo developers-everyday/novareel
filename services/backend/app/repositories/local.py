@@ -13,6 +13,7 @@ from app.models import (
   AssetRecord,
   AnalyticsEventRecord,
   GenerationJobRecord,
+  JobCreateParams,
   JobStatus,
   ProjectCreateRequest,
   ProjectRecord,
@@ -169,14 +170,7 @@ class LocalRepository(Repository):
     self,
     project_id: str,
     owner_id: str,
-    aspect_ratio: str,
-    voice_style: str,
-    voice_provider: str = 'polly',
-    voice_gender: str = 'female',
-    language: str = 'en',
-    background_music: str = 'auto',
-    max_attempts: int = 3,
-    idempotency_key: str | None = None,
+    params: JobCreateParams,
   ) -> GenerationJobRecord:
     store = self._load()
     now = _utcnow()
@@ -191,18 +185,27 @@ class LocalRepository(Repository):
       timings={},
       created_at=now,
       updated_at=now,
-      aspect_ratio=aspect_ratio,
-      voice_style=voice_style,
-      voice_provider=voice_provider,
-      voice_gender=voice_gender,
-      language=language,
-      background_music=background_music,
-      idempotency_key=idempotency_key,
+      aspect_ratio=params.aspect_ratio,
+      voice_style=params.voice_style,
+      voice_provider=params.voice_provider,
+      voice_gender=params.voice_gender,
+      language=params.language,
+      background_music=params.background_music,
+      idempotency_key=params.idempotency_key,
       attempt_count=0,
-      max_attempts=max_attempts,
+      max_attempts=params.max_attempts,
       next_attempt_at=None,
       dead_lettered=False,
       dead_letter_reason=None,
+      # Phase 2
+      job_type=params.job_type,
+      source_job_id=params.source_job_id,
+      script_template=params.script_template,
+      video_style=params.video_style,
+      transition_style=params.transition_style,
+      caption_style=params.caption_style,
+      show_title_card=params.show_title_card,
+      cta_text=params.cta_text,
     )
     store['jobs'][job.id] = job.model_dump(mode='json')
     self._save(store)
@@ -339,18 +342,33 @@ class LocalRepository(Repository):
     self._save(store)
     return GenerationJobRecord.model_validate(raw)
 
-  def set_result(self, project_id: str, result: VideoResultRecord) -> VideoResultRecord:
+  def set_result(self, project_id: str, job_id: str, result: VideoResultRecord) -> VideoResultRecord:
     store = self._load()
-    store['results'][project_id] = result.model_dump(mode='json')
+    key = f'{project_id}:{job_id}'
+    store['results'][key] = result.model_dump(mode='json')
     self._save(store)
     return result
 
-  def get_result(self, project_id: str) -> VideoResultRecord | None:
+  def get_result(self, project_id: str, job_id: str | None = None) -> VideoResultRecord | None:
     store = self._load()
-    raw = store['results'].get(project_id)
-    if not raw:
-      return None
-    return VideoResultRecord.model_validate(raw)
+    if job_id:
+      key = f'{project_id}:{job_id}'
+      raw = store['results'].get(key)
+      if not raw:
+        return None
+      return VideoResultRecord.model_validate(raw)
+    # Return latest result for this project
+    results = self.list_results(project_id)
+    return results[0] if results else None
+
+  def list_results(self, project_id: str) -> list[VideoResultRecord]:
+    store = self._load()
+    results: list[VideoResultRecord] = []
+    for key, raw in store['results'].items():
+      if key.startswith(f'{project_id}:'):
+        results.append(VideoResultRecord.model_validate(raw))
+    results.sort(key=lambda r: r.completed_at, reverse=True)
+    return results
 
   def increment_usage(self, owner_id: str, month: str, increment_by: int = 1) -> UsageSummary:
     store = self._load()

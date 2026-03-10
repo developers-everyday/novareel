@@ -8,6 +8,7 @@ from app.models import (
   AssetRecord,
   AnalyticsEventRecord,
   GenerationJobRecord,
+  JobCreateParams,
   JobStatus,
   ProjectCreateRequest,
   ProjectRecord,
@@ -57,14 +58,7 @@ class Repository(ABC):
     self,
     project_id: str,
     owner_id: str,
-    aspect_ratio: str,
-    voice_style: str,
-    voice_provider: str = 'polly',
-    voice_gender: str = 'female',
-    language: str = 'en',
-    background_music: str = 'auto',
-    max_attempts: int = 3,
-    idempotency_key: str | None = None,
+    params: JobCreateParams,
   ) -> GenerationJobRecord:
     raise NotImplementedError
 
@@ -112,11 +106,15 @@ class Repository(ABC):
     raise NotImplementedError
 
   @abstractmethod
-  def set_result(self, project_id: str, result: VideoResultRecord) -> VideoResultRecord:
+  def set_result(self, project_id: str, job_id: str, result: VideoResultRecord) -> VideoResultRecord:
     raise NotImplementedError
 
   @abstractmethod
-  def get_result(self, project_id: str) -> VideoResultRecord | None:
+  def get_result(self, project_id: str, job_id: str | None = None) -> VideoResultRecord | None:
+    raise NotImplementedError
+
+  @abstractmethod
+  def list_results(self, project_id: str) -> list[VideoResultRecord]:
     raise NotImplementedError
 
   @abstractmethod

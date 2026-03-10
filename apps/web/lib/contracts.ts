@@ -6,7 +6,9 @@ export type JobStatus =
   | 'narration'
   | 'rendering'
   | 'completed'
-  | 'failed';
+  | 'failed'
+  | 'loading'
+  | 'translating';
 
 export interface Project {
   id: string;
@@ -42,10 +44,20 @@ export interface GenerationJob {
   dead_lettered?: boolean;
   dead_letter_reason?: string | null;
   last_completed_stage?: string | null;
+  // Phase 2
+  job_type?: string;
+  source_job_id?: string | null;
+  script_template?: string;
+  video_style?: string;
+  transition_style?: string;
+  caption_style?: string;
+  show_title_card?: boolean;
+  cta_text?: string | null;
 }
 
 export interface VideoResult {
   project_id: string;
+  job_id?: string;
   video_s3_key: string;
   video_url: string;
   duration_sec: number;
@@ -55,6 +67,8 @@ export interface VideoResult {
   transcript_url?: string | null;
   subtitle_key?: string | null;
   subtitle_url?: string | null;
+  script_lines?: string[];
+  language?: string;
 }
 
 export interface UsageSummary {

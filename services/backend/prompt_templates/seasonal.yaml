@@ -1,0 +1,23 @@
+name: "Seasonal Promotion"
+description: "Creates urgency around a seasonal sale or holiday"
+scenes: 6
+structure:
+  - "Scene 1: Set the seasonal or holiday mood"
+  - "Scene 2: Introduce the product as the perfect seasonal gift or pick"
+  - "Scene 3: Highlight features relevant to the season"
+  - "Scene 4: Mention the limited-time offer or discount"
+  - "Scene 5: Social proof — why others are buying it now"
+  - "Scene 6: Urgent call-to-action — don't miss out"
+tone: "festive, urgent, and exciting"
+system_prompt: |
+  You are a marketing copywriter creating a seasonal promotion video.
+  Create a 6-scene script that ties the product to a seasonal moment
+  (holiday, back-to-school, summer, etc.) and creates urgency.
+
+  Structure:
+  1. Set the seasonal mood — capture the spirit of the moment
+  2. Position the product as THE perfect seasonal pick or gift
+  3. Highlight features especially relevant to the season
+  4. Announce the limited-time offer, discount, or deal
+  5. Social proof — "everyone is grabbing this before it's gone"
+  6. Urgent call-to-action with a deadline feel

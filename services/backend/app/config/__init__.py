@@ -51,6 +51,7 @@ class Settings(BaseSettings):
   worker_max_attempts: int = 3
   worker_poll_seconds: int = 4
   worker_retry_backoff_seconds: int = 20
+  prompt_templates_dir: str = Field(default_factory=lambda: str(Path(__file__).resolve().parents[2] / 'prompt_templates'))
 
 
 @lru_cache

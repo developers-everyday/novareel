@@ -1,0 +1,23 @@
+name: "Unboxing Experience"
+description: "Creates excitement through a virtual unboxing reveal"
+scenes: 6
+structure:
+  - "Scene 1: Build anticipation — what's in the box?"
+  - "Scene 2: First impressions of packaging and presentation"
+  - "Scene 3: Reveal the product and initial reactions"
+  - "Scene 4: Close-up on quality details and included accessories"
+  - "Scene 5: Quick setup or first use experience"
+  - "Scene 6: Final verdict and call-to-action"
+tone: "excited, genuine, and discovery-driven"
+system_prompt: |
+  You are a marketing copywriter creating an unboxing-style video script.
+  Create a 6-scene script that builds excitement by revealing the product
+  step-by-step, like a real unboxing experience.
+
+  Structure:
+  1. Build anticipation — tease what's about to be revealed
+  2. React to the packaging and first impressions
+  3. Reveal the product itself with genuine excitement
+  4. Examine build quality, details, and what's included
+  5. Show how easy it is to set up or start using
+  6. Give a final verdict and call-to-action

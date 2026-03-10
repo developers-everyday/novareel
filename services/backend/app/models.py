@@ -14,6 +14,9 @@ class JobStatus(str, Enum):
   RENDERING = 'rendering'
   COMPLETED = 'completed'
   FAILED = 'failed'
+  # Phase 2 — Feature A (Translation)
+  LOADING = 'loading'
+  TRANSLATING = 'translating'
 
 
 class ProjectCreateRequest(BaseModel):
@@ -59,6 +62,7 @@ class AssetUploadUrlResponse(BaseModel):
 
 
 class GenerateRequest(BaseModel):
+  # Phase 1 (existing)
   aspect_ratio: Literal['16:9', '1:1', '9:16'] = '16:9'
   voice_style: Literal['energetic', 'professional', 'friendly'] = 'energetic'
   voice_provider: Literal['polly', 'edge_tts', 'elevenlabs'] = 'polly'
@@ -66,6 +70,41 @@ class GenerateRequest(BaseModel):
   language: str = 'en'
   background_music: Literal['none', 'auto', 'upbeat', 'calm', 'corporate', 'luxury'] = 'auto'
   idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
+  # Phase 2
+  script_template: str = 'product_showcase'
+  video_style: Literal['product_only', 'product_lifestyle', 'lifestyle_focus'] = 'product_only'
+  transition_style: Literal['cut', 'crossfade', 'slide_left', 'wipe_right', 'zoom', 'dissolve'] = 'crossfade'
+  caption_style: Literal['sentence', 'word_highlight', 'karaoke', 'none'] = 'sentence'
+  show_title_card: bool = True
+  cta_text: str | None = None
+
+
+class TranslateRequest(BaseModel):
+  """Request body for POST /v1/projects/{project_id}/jobs/{job_id}/translate."""
+  target_languages: list[str]
+  voice_provider: Literal['polly', 'edge_tts', 'elevenlabs'] = 'edge_tts'
+  voice_gender: Literal['male', 'female'] = 'female'
+
+
+class JobCreateParams(BaseModel):
+  """All parameters for creating a generation or translation job."""
+  aspect_ratio: str = '16:9'
+  voice_style: str = 'energetic'
+  voice_provider: str = 'polly'
+  voice_gender: str = 'female'
+  language: str = 'en'
+  background_music: str = 'auto'
+  idempotency_key: str | None = None
+  max_attempts: int = 3
+  # Phase 2
+  script_template: str = 'product_showcase'
+  video_style: str = 'product_only'
+  transition_style: str = 'crossfade'
+  caption_style: str = 'sentence'
+  show_title_card: bool = True
+  cta_text: str | None = None
+  job_type: str = 'generation'
+  source_job_id: str | None = None
 
 
 class GenerationJobRecord(BaseModel):
@@ -92,6 +131,15 @@ class GenerationJobRecord(BaseModel):
   next_attempt_at: datetime | None = None
   dead_lettered: bool = False
   dead_letter_reason: str | None = None
+  # Phase 2
+  job_type: str = 'generation'
+  source_job_id: str | None = None
+  script_template: str = 'product_showcase'
+  video_style: str = 'product_only'
+  transition_style: str = 'crossfade'
+  caption_style: str = 'sentence'
+  show_title_card: bool = True
+  cta_text: str | None = None
 
 
 class StoryboardSegment(BaseModel):
@@ -100,10 +148,14 @@ class StoryboardSegment(BaseModel):
   image_asset_id: str
   start_sec: float
   duration_sec: float
+  # Phase 2 — Feature C (Stock Footage)
+  media_type: Literal['image', 'video'] = 'image'
+  video_path: str | None = None
 
 
 class VideoResultRecord(BaseModel):
   project_id: str
+  job_id: str = ''  # Phase 2 — per-job results
   video_s3_key: str
   video_url: str
   duration_sec: float
@@ -114,6 +166,8 @@ class VideoResultRecord(BaseModel):
   subtitle_key: str | None = None
   subtitle_url: str | None = None
   storyboard: list[StoryboardSegment] = Field(default_factory=list)
+  script_lines: list[str] = Field(default_factory=list)  # Phase 2 — for translation
+  language: str = 'en'  # Phase 2 — for translation
   completed_at: datetime
 
 

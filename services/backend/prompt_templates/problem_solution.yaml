@@ -1,0 +1,23 @@
+name: "Problem/Solution"
+description: "Presents a pain point and positions the product as the solution"
+scenes: 6
+structure:
+  - "Scene 1: Present the common problem or frustration"
+  - "Scene 2: Amplify the pain point with a relatable scenario"
+  - "Scene 3: Introduce the product as the solution"
+  - "Scene 4: Show key features that solve the problem"
+  - "Scene 5: Demonstrate the transformation or result"
+  - "Scene 6: Call-to-action with urgency"
+tone: "empathetic, then confident and enthusiastic"
+system_prompt: |
+  You are a marketing copywriter specializing in problem/solution narratives.
+  Create a 6-scene video script that first identifies a common frustration,
+  then positions the product as the perfect solution.
+
+  Structure:
+  1. Open with a relatable problem statement
+  2. Paint a vivid picture of the frustration
+  3. Introduce the product with a "But what if..." transition
+  4. Highlight 2-3 key features that directly address the problem
+  5. Show the positive outcome / transformation
+  6. Close with a compelling call-to-action

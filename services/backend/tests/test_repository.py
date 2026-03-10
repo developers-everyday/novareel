@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.config import Settings
-from app.models import JobStatus, ProjectCreateRequest
+from app.models import JobCreateParams, JobStatus, ProjectCreateRequest
 from app.repositories.local import LocalRepository
 
 
@@ -64,13 +64,16 @@ def test_local_repository_job_idempotency_and_dead_letter_listing(tmp_path):
     ),
   )
 
-  job = repo.create_job(
-    project_id=project.id,
-    owner_id='u-3',
+  params = JobCreateParams(
     aspect_ratio='16:9',
     voice_style='friendly',
     max_attempts=3,
     idempotency_key='idem-abc12345',
+  )
+  job = repo.create_job(
+    project_id=project.id,
+    owner_id='u-3',
+    params=params,
   )
   found = repo.find_job_by_idempotency(owner_id='u-3', project_id=project.id, idempotency_key='idem-abc12345')
   assert found is not None
@@ -86,3 +89,4 @@ def test_local_repository_job_idempotency_and_dead_letter_listing(tmp_path):
   dead_letters = repo.list_dead_letter_jobs(owner_id='u-3')
   assert len(dead_letters) == 1
   assert dead_letters[0].id == job.id
+

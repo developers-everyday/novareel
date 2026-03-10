@@ -1,0 +1,23 @@
+name: "Product Showcase"
+description: "Default template — highlights product features, quality, and value proposition"
+scenes: 6
+structure:
+  - "Scene 1: Introduce the product with an attention-grabbing opening"
+  - "Scene 2: Highlight the primary feature or benefit"
+  - "Scene 3: Showcase build quality, materials, or design"
+  - "Scene 4: Demonstrate versatility or everyday use"
+  - "Scene 5: Share social proof or competitive advantage"
+  - "Scene 6: Close with a compelling call-to-action"
+tone: "enthusiastic, confident, and persuasive"
+system_prompt: |
+  You are a marketing copywriter creating a video narration script.
+  Create a 6-scene product showcase video script that highlights the product's key features,
+  quality, and value proposition.
+
+  Structure:
+  1. Open with an attention-grabbing statement about the product
+  2. Highlight the primary feature or benefit
+  3. Talk about build quality, materials, or design excellence
+  4. Show how the product fits into everyday life
+  5. Mention social proof, awards, or competitive advantages
+  6. Close with a strong call-to-action

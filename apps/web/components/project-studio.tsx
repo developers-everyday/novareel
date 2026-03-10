@@ -13,12 +13,13 @@ import {
   listProjectJobs,
   listProjects,
   trackAnalyticsEvent,
+  translateProject,
   uploadAsset
 } from '@/lib/api';
 import type { GenerationJob, Project, UsageSummary, VideoResult } from '@/lib/contracts';
 import { JobStatusCard } from '@/components/job-status-card';
 
-const pollableStatuses = new Set<GenerationJob['status']>(['queued', 'analyzing', 'scripting', 'matching', 'narration', 'rendering']);
+const pollableStatuses = new Set<GenerationJob['status']>(['queued', 'analyzing', 'scripting', 'matching', 'narration', 'rendering', 'loading', 'translating']);
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString();
@@ -35,8 +36,16 @@ export function ProjectStudio() {
   const [voiceGender, setVoiceGender] = useState('female');
   const [language, setLanguage] = useState('en');
   const [backgroundMusic, setBackgroundMusic] = useState('auto');
+  const [scriptTemplate, setScriptTemplate] = useState('product_showcase');
   const [brandColors, setBrandColors] = useState('#f97316,#0f172a');
   const [files, setFiles] = useState<File[]>([]);
+
+  // Translation modal state
+  const [showTranslateModal, setShowTranslateModal] = useState(false);
+  const [translateLanguages, setTranslateLanguages] = useState<string[]>([]);
+  const [translateVoiceProvider, setTranslateVoiceProvider] = useState('edge_tts');
+  const [translateVoiceGender, setTranslateVoiceGender] = useState('female');
+  const [translating, setTranslating] = useState(false);
 
   const [projectId, setProjectId] = useState<string | null>(null);
   const [job, setJob] = useState<GenerationJob | null>(null);
@@ -100,7 +109,7 @@ export function ProjectStudio() {
       }
 
       if (nextJob.status === 'completed' && projectId) {
-        const nextResult = await getProjectResult(projectId, token);
+        const nextResult = await getProjectResult(projectId, undefined, token);
         setResult(nextResult);
         const summary = await getUsage(token);
         setUsage(summary);
@@ -183,7 +192,8 @@ export function ProjectStudio() {
           voice_gender: voiceGender,
           language: language,
           background_music: backgroundMusic,
-          idempotency_key: idempotencyKey
+          idempotency_key: idempotencyKey,
+          script_template: scriptTemplate,
         },
         token
       );
@@ -261,6 +271,39 @@ export function ProjectStudio() {
       setCsatSent(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit CSAT');
+    }
+  }
+
+  function toggleTranslateLanguage(lang: string) {
+    setTranslateLanguages((prev) =>
+      prev.includes(lang) ? prev.filter((l) => l !== lang) : [...prev, lang]
+    );
+  }
+
+  async function onTranslateSubmit() {
+    if (!projectId || !job || translateLanguages.length === 0) {
+      return;
+    }
+    setTranslating(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      const newJobs = await translateProject(projectId, job.id, {
+        target_languages: translateLanguages,
+        voice_provider: translateVoiceProvider,
+        voice_gender: translateVoiceGender,
+      }, token);
+      setShowTranslateModal(false);
+      setTranslateLanguages([]);
+      // Poll the first translation job
+      if (newJobs.length > 0) {
+        setJob(newJobs[0]);
+      }
+      await refreshSideData(projectId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Translation request failed');
+    } finally {
+      setTranslating(false);
     }
   }
 
@@ -398,6 +441,26 @@ export function ProjectStudio() {
           </label>
         </div>
 
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="block text-sm font-medium text-slate-700">
+            Script style
+            <select
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              value={scriptTemplate}
+              onChange={(event) => setScriptTemplate(event.target.value)}
+            >
+              <option value="product_showcase">Product Showcase (Default)</option>
+              <option value="problem_solution">Problem / Solution</option>
+              <option value="comparison">Product Comparison</option>
+              <option value="unboxing">Unboxing Experience</option>
+              <option value="testimonial">Customer Testimonial</option>
+              <option value="how_to">How-To / Tutorial</option>
+              <option value="seasonal">Seasonal Promotion</option>
+              <option value="luxury">Luxury / Premium</option>
+            </select>
+          </label>
+        </div>
+
         <label className="block text-sm font-medium text-slate-700">
           Brand colors (comma-separated)
           <input
@@ -498,8 +561,95 @@ export function ProjectStudio() {
                   Download Subtitles
                 </a>
               ) : null}
+              {job && job.status === 'completed' && job.job_type !== 'translation' ? (
+                <button
+                  type="button"
+                  onClick={() => setShowTranslateModal(true)}
+                  className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                >
+                  🌐 Translate
+                </button>
+              ) : null}
             </div>
+            {result.language && result.language !== 'en' ? (
+              <p className="mt-2 text-xs text-blue-600 font-medium">Language: {result.language.toUpperCase()}</p>
+            ) : null}
             {projectId ? <p className="mt-2 text-xs text-slate-500">Project ID: {projectId}</p> : null}
+          </section>
+        ) : null}
+
+        {showTranslateModal ? (
+          <section className="surface p-5">
+            <h3 className="text-lg font-semibold text-ink">Translate video</h3>
+            <p className="mt-1 text-sm text-slate-600">Select target languages and voice settings for dubbed versions.</p>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {[
+                { code: 'es', label: 'Spanish' },
+                { code: 'fr', label: 'French' },
+                { code: 'de', label: 'German' },
+                { code: 'pt', label: 'Portuguese' },
+                { code: 'it', label: 'Italian' },
+                { code: 'ja', label: 'Japanese' },
+                { code: 'ko', label: 'Korean' },
+                { code: 'zh', label: 'Chinese' },
+                { code: 'ar', label: 'Arabic' },
+                { code: 'hi', label: 'Hindi' },
+                { code: 'ru', label: 'Russian' },
+                { code: 'tr', label: 'Turkish' },
+              ].map((lang) => (
+                <label key={lang.code} className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={translateLanguages.includes(lang.code)}
+                    onChange={() => toggleTranslateLanguage(lang.code)}
+                    className="rounded border-slate-300"
+                  />
+                  {lang.label}
+                </label>
+              ))}
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <label className="block text-sm font-medium text-slate-700">
+                Voice engine
+                <select
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                  value={translateVoiceProvider}
+                  onChange={(e) => setTranslateVoiceProvider(e.target.value)}
+                >
+                  <option value="edge_tts">Edge TTS (Free · 50+ languages)</option>
+                  <option value="polly">Amazon Polly</option>
+                  <option value="elevenlabs">ElevenLabs (Premium)</option>
+                </select>
+              </label>
+              <label className="block text-sm font-medium text-slate-700">
+                Voice gender
+                <select
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                  value={translateVoiceGender}
+                  onChange={(e) => setTranslateVoiceGender(e.target.value)}
+                >
+                  <option value="female">Female</option>
+                  <option value="male">Male</option>
+                </select>
+              </label>
+            </div>
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                disabled={translating || translateLanguages.length === 0}
+                onClick={() => onTranslateSubmit().catch(() => undefined)}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+              >
+                {translating ? 'Submitting...' : `Translate to ${translateLanguages.length} language${translateLanguages.length !== 1 ? 's' : ''}`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowTranslateModal(false)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+            </div>
           </section>
         ) : null}
 

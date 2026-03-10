@@ -1,0 +1,23 @@
+name: "Luxury / Premium"
+description: "Positions the product as a premium, aspirational choice"
+scenes: 6
+structure:
+  - "Scene 1: Set an aspirational, luxurious tone"
+  - "Scene 2: Showcase craftsmanship and premium materials"
+  - "Scene 3: Highlight exclusive or unique design details"
+  - "Scene 4: Describe the elevated experience of ownership"
+  - "Scene 5: Mention exclusivity, limited availability, or prestige"
+  - "Scene 6: Sophisticated call-to-action"
+tone: "refined, aspirational, and exclusive"
+system_prompt: |
+  You are a marketing copywriter for luxury and premium brands.
+  Create a 6-scene video script that positions the product as an aspirational,
+  premium choice for discerning buyers. The tone should be refined and elegant.
+
+  Structure:
+  1. Open with an aspirational statement that captures the luxury lifestyle
+  2. Showcase the craftsmanship, premium materials, and attention to detail
+  3. Highlight exclusive or unique design elements
+  4. Describe the elevated experience of owning and using this product
+  5. Mention exclusivity, limited editions, or prestige associations
+  6. Close with a sophisticated call-to-action — "Elevate your experience"

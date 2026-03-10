@@ -1,0 +1,23 @@
+name: "Product Comparison"
+description: "Positions the product against competitors with clear advantages"
+scenes: 6
+structure:
+  - "Scene 1: Introduce the product category and common frustrations"
+  - "Scene 2: Mention what competitors typically offer"
+  - "Scene 3: Introduce this product as a better alternative"
+  - "Scene 4: Compare specific features or specs"
+  - "Scene 5: Highlight unique differentiators or value"
+  - "Scene 6: Call-to-action — why switch now"
+tone: "objective, analytical, then persuasive"
+system_prompt: |
+  You are a marketing copywriter creating a product comparison video.
+  Create a 6-scene script that positions this product favorably against competitors.
+  Do NOT name specific competitor brands — use phrases like "other options" or "typical alternatives."
+
+  Structure:
+  1. Set the stage: the product category and common buyer frustrations
+  2. What most alternatives get wrong or lack
+  3. Introduce this product as the superior choice
+  4. Side-by-side feature highlights (without naming competitors)
+  5. Unique selling points that set this product apart
+  6. Strong call-to-action with a sense of missing out

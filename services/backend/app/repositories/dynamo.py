@@ -10,6 +10,7 @@ from app.models import (
   AssetRecord,
   AnalyticsEventRecord,
   GenerationJobRecord,
+  JobCreateParams,
   JobStatus,
   ProjectCreateRequest,
   ProjectRecord,
@@ -130,14 +131,7 @@ class DynamoRepository(Repository):
     self,
     project_id: str,
     owner_id: str,
-    aspect_ratio: str,
-    voice_style: str,
-    voice_provider: str = 'polly',
-    voice_gender: str = 'female',
-    language: str = 'en',
-    background_music: str = 'auto',
-    max_attempts: int = 3,
-    idempotency_key: str | None = None,
+    params: JobCreateParams,
   ) -> GenerationJobRecord:
     now = self._utcnow()
     job = GenerationJobRecord(
@@ -151,18 +145,27 @@ class DynamoRepository(Repository):
       timings={},
       created_at=now,
       updated_at=now,
-      aspect_ratio=aspect_ratio,
-      voice_style=voice_style,
-      voice_provider=voice_provider,
-      voice_gender=voice_gender,
-      language=language,
-      background_music=background_music,
-      idempotency_key=idempotency_key,
+      aspect_ratio=params.aspect_ratio,
+      voice_style=params.voice_style,
+      voice_provider=params.voice_provider,
+      voice_gender=params.voice_gender,
+      language=params.language,
+      background_music=params.background_music,
+      idempotency_key=params.idempotency_key,
       attempt_count=0,
-      max_attempts=max_attempts,
+      max_attempts=params.max_attempts,
       next_attempt_at=None,
       dead_lettered=False,
       dead_letter_reason=None,
+      # Phase 2
+      job_type=params.job_type,
+      source_job_id=params.source_job_id,
+      script_template=params.script_template,
+      video_style=params.video_style,
+      transition_style=params.transition_style,
+      caption_style=params.caption_style,
+      show_title_card=params.show_title_card,
+      cta_text=params.cta_text,
     )
     self._jobs.put_item(Item=job.model_dump(mode='json'))
     return job
@@ -278,16 +281,31 @@ class DynamoRepository(Repository):
     self._jobs.put_item(Item=job.model_dump(mode='json'))
     return job
 
-  def set_result(self, project_id: str, result: VideoResultRecord) -> VideoResultRecord:
+  def set_result(self, project_id: str, job_id: str, result: VideoResultRecord) -> VideoResultRecord:
     self._results.put_item(Item=result.model_dump(mode='json'))
     return result
 
-  def get_result(self, project_id: str) -> VideoResultRecord | None:
-    response = self._results.get_item(Key={'project_id': project_id})
-    item = response.get('Item')
-    if not item:
-      return None
-    return VideoResultRecord.model_validate(item)
+  def get_result(self, project_id: str, job_id: str | None = None) -> VideoResultRecord | None:
+    if job_id:
+      # Query by composite key
+      response = self._results.get_item(Key={'project_id': project_id, 'job_id': job_id})
+      item = response.get('Item')
+      if not item:
+        return None
+      return VideoResultRecord.model_validate(item)
+    # Return latest result for this project
+    results = self.list_results(project_id)
+    return results[0] if results else None
+
+  def list_results(self, project_id: str) -> list[VideoResultRecord]:
+    response = self._results.scan()
+    results = [
+      VideoResultRecord.model_validate(item)
+      for item in response.get('Items', [])
+      if item.get('project_id') == project_id
+    ]
+    results.sort(key=lambda r: r.completed_at, reverse=True)
+    return results
 
   def increment_usage(self, owner_id: str, month: str, increment_by: int = 1) -> UsageSummary:
     key = f'{owner_id}:{month}'

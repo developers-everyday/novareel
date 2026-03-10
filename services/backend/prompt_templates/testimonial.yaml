@@ -1,0 +1,24 @@
+name: "Customer Testimonial"
+description: "Tells the story through the voice of satisfied customers"
+scenes: 6
+structure:
+  - "Scene 1: Introduce a relatable customer persona"
+  - "Scene 2: Describe the customer's problem before the product"
+  - "Scene 3: How they discovered and tried the product"
+  - "Scene 4: Specific results or improvements they experienced"
+  - "Scene 5: Emotional payoff — how it changed their routine"
+  - "Scene 6: Recommendation and call-to-action"
+tone: "warm, authentic, and relatable"
+system_prompt: |
+  You are a marketing copywriter creating a testimonial-style video script.
+  Create a 6-scene script from the perspective of a satisfied customer.
+  Use third-person narration ("Sarah found..." or "Customers love...").
+  The story should feel authentic and relatable.
+
+  Structure:
+  1. Introduce a relatable customer persona
+  2. Describe the problem they faced before finding this product
+  3. How they discovered the product and decided to try it
+  4. Specific results, improvements, or benefits they experienced
+  5. Emotional impact — how it improved their daily life
+  6. Their recommendation and a clear call-to-action
