@@ -1,6 +1,6 @@
 # Phase 4 Development Plan — Remaining Integration Gaps
 
-> **Status**: Draft
+> **Status**: In Progress — Gap C complete
 > **Created**: 2026-03-10
 > **Scope**: Complete the 3 remaining gaps from the ShortGPT Integration Analysis
 
@@ -22,7 +22,9 @@ Phase 1–3 implemented 11 of 14 ShortGPT integration recommendations. This plan
 
 ---
 
-## Gap A: Explicit Resumable Pipeline (Sprint 10)
+## Gap A: Explicit Resumable Pipeline *(Deferred — Future Work)*
+
+> **Status**: Deferred. The implicit artifact-based resume already works. This is a polish/observability improvement, not a functional requirement.
 
 **Current state**: Pipeline stores intermediate artifacts per stage and reloads them on retry, but there is no explicit `last_completed_stage` field on the job record. Resume logic is implicit (check if artifact exists).
 
