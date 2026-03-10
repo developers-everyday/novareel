@@ -63,6 +63,12 @@ class VideoEffectsConfig:
     title_overlay: TextOverlay | None = None
     cta_overlay: TextOverlay | None = None
     caption_style: str = 'none'
+    # Phase 3 — Brand Kit assets (set by BrandService.build_effects_config)
+    logo_path: 'Path | None' = None
+    intro_clip_path: 'Path | None' = None
+    outro_clip_path: 'Path | None' = None
+    brand_font_path: 'Path | None' = None
+    brand_colors: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_job(cls, job) -> VideoEffectsConfig:

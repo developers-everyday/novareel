@@ -56,6 +56,25 @@ class Settings(BaseSettings):
   transcription_backend: str = 'mock'  # 'aws_transcribe', 'whisper', or 'mock'
   whisper_model: str = 'base'
   pexels_api_key: str | None = None
+  # Phase 3 — Feature A: Brand Kit & Asset Library
+  max_library_assets: int = 50
+  max_library_file_size_bytes: int = 52_428_800  # 50 MB
+  allowed_library_content_types: list[str] = [
+    'image/jpeg', 'image/png', 'image/webp', 'image/svg+xml',
+    'font/ttf', 'font/otf', 'application/x-font-ttf', 'application/x-font-opentype',
+    'video/mp4',
+    'audio/mpeg', 'audio/mp3',
+  ]
+  # Phase 3 — Feature C: Social Media Distribution
+  google_client_id: str | None = None
+  google_client_secret: str | None = None
+  social_redirect_base_url: str = 'http://localhost:8000'
+  encryption_key: str | None = None  # Fernet key for token encryption
+  # Phase 3 — Feature F: Performance & Scalability
+  worker_mode: str = 'polling'  # 'polling' (default) or 'celery'
+  celery_broker_url: str = 'redis://localhost:6379/0'
+  ffmpeg_preset: str = 'medium'  # ultrafast, veryfast, medium
+  cdn_base_url: str | None = None  # CloudFront URL (empty = direct S3/local)
 
 
 @lru_cache

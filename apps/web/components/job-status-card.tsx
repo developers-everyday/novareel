@@ -2,12 +2,16 @@ import type { GenerationJob } from '@/lib/contracts';
 
 const stageCopy: Record<string, string> = {
   queued: 'Queued for processing',
+  analyzing: 'Analyzing product images',
   scripting: 'Generating storyboard script',
   matching: 'Matching product images with script',
   narration: 'Synthesizing voice narration',
   rendering: 'Rendering final video',
   completed: 'Completed',
-  failed: 'Failed'
+  failed: 'Failed',
+  loading: 'Loading source video data',
+  translating: 'Translating script',
+  awaiting_approval: 'Awaiting storyboard approval',
 };
 
 export function JobStatusCard({ job }: { job: GenerationJob }) {

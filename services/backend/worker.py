@@ -134,5 +134,29 @@ def run_forever() -> None:
     logger.info('Processed %s job(s)', processed)
 
 
+def run_celery_worker() -> None:
+  """Start the Celery worker process for distributed task execution."""
+  from celery_config import celery_app  # noqa: F401
+
+  settings = get_settings()
+  logger.info('Starting Celery worker (broker=%s)', settings.celery_broker_url)
+
+  celery_app.worker_main([
+    'worker',
+    '--loglevel=info',
+    '--concurrency=2',
+    '--pool=prefork',
+  ])
+
+
 if __name__ == '__main__':
-  run_forever()
+  import sys
+  mode = 'polling'
+  for arg in sys.argv[1:]:
+    if arg.startswith('--mode='):
+      mode = arg.split('=', 1)[1]
+
+  if mode == 'celery':
+    run_celery_worker()
+  else:
+    run_forever()

@@ -8,7 +8,8 @@ export type JobStatus =
   | 'completed'
   | 'failed'
   | 'loading'
-  | 'translating';
+  | 'translating'
+  | 'awaiting_approval';
 
 export interface Project {
   id: string;
@@ -53,6 +54,9 @@ export interface GenerationJob {
   caption_style?: string;
   show_title_card?: boolean;
   cta_text?: string | null;
+  // Phase 3
+  auto_approve?: boolean;
+  variant_group_id?: string | null;
 }
 
 export interface VideoResult {
@@ -102,4 +106,127 @@ export interface AdminOverview {
   videos_generated: number;
   recent_jobs: GenerationJob[];
   recent_events: AnalyticsEventRecord[];
+}
+
+// ── Phase 3 — Feature A: Brand Kit & Asset Library ──────────────────────
+
+export interface BrandKit {
+  owner_id: string;
+  brand_name: string;
+  primary_color: string;
+  secondary_color: string;
+  accent_color: string;
+  logo_asset_id: string | null;
+  font_asset_id: string | null;
+  intro_clip_asset_id: string | null;
+  outro_clip_asset_id: string | null;
+  custom_music_asset_ids: string[];
+  updated_at: string;
+}
+
+export interface BrandKitInput {
+  brand_name?: string;
+  primary_color?: string;
+  secondary_color?: string;
+  accent_color?: string;
+  logo_asset_id?: string | null;
+  font_asset_id?: string | null;
+  intro_clip_asset_id?: string | null;
+  outro_clip_asset_id?: string | null;
+  custom_music_asset_ids?: string[];
+}
+
+export interface LibraryAsset {
+  id: string;
+  owner_id: string;
+  asset_type: 'logo' | 'font' | 'intro_clip' | 'outro_clip' | 'music' | 'image';
+  filename: string;
+  content_type: string;
+  file_size: number;
+  object_key: string;
+  created_at: string;
+}
+
+export interface LibraryAssetUploadInput {
+  filename: string;
+  asset_type: 'logo' | 'font' | 'intro_clip' | 'outro_clip' | 'music' | 'image';
+  content_type: string;
+  file_size: number;
+}
+
+export interface LibraryAssetUploadResponse {
+  asset_id: string;
+  object_key: string;
+  upload_url: string;
+  method: 'PUT';
+  headers: Record<string, string>;
+}
+
+// ── Phase 3 — Feature C: Social Media Distribution ──────────────────────
+
+export interface MetadataRequest {
+  platforms: ('youtube' | 'tiktok' | 'instagram')[];
+  product_keywords?: string[];
+}
+
+export interface MetadataResponse {
+  youtube?: Record<string, unknown>;
+  tiktok?: Record<string, unknown>;
+  instagram?: Record<string, unknown>;
+}
+
+export interface SocialConnection {
+  id: string;
+  owner_id: string;
+  platform: 'youtube' | 'tiktok' | 'instagram';
+  platform_user_id: string;
+  platform_username: string;
+  token_expires_at: string;
+  connected_at: string;
+}
+
+export interface PublishRequest {
+  title: string;
+  description?: string;
+  tags?: string[];
+  category?: string;
+  privacy?: 'public' | 'unlisted' | 'private';
+}
+
+export interface PublishRecord {
+  id: string;
+  owner_id: string;
+  job_id: string;
+  platform: string;
+  platform_video_id: string;
+  platform_url: string;
+  metadata_used: Record<string, unknown>;
+  published_at: string;
+}
+
+// ── Phase 3 — Feature D: Video Editor & Storyboard ─────────────────────
+
+export interface StoryboardScene {
+  order: number;
+  script_line: string;
+  image_asset_id: string;
+  start_sec: number;
+  duration_sec: number;
+  media_type?: 'image' | 'video';
+  video_path?: string | null;
+}
+
+export interface Storyboard {
+  job_id: string;
+  project_id: string;
+  scenes: StoryboardScene[];
+  status: string;
+}
+
+// ── Phase 3 — Feature E: A/B Video Variants ────────────────────────────
+
+export interface GenerateVariantsInput {
+  variant_count?: number;
+  shared?: Record<string, unknown>;
+  overrides?: Record<string, unknown>[];
 }

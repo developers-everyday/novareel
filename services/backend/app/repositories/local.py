@@ -12,11 +12,15 @@ from app.config import Settings
 from app.models import (
   AssetRecord,
   AnalyticsEventRecord,
+  BrandKitRecord,
   GenerationJobRecord,
   JobCreateParams,
   JobStatus,
+  LibraryAssetRecord,
   ProjectCreateRequest,
   ProjectRecord,
+  PublishRecord,
+  SocialConnectionRecord,
   UsageSummary,
   VideoResultRecord,
 )
@@ -46,6 +50,10 @@ class LocalRepository(Repository):
       'results': {},
       'usage': {},
       'analytics': {},
+      'brand_kits': {},
+      'library_assets': {},
+      'social_connections': {},
+      'publish_records': {},
     }
     self._path.write_text(json.dumps(initial, indent=2), encoding='utf-8')
 
@@ -58,6 +66,10 @@ class LocalRepository(Repository):
     payload.setdefault('results', {})
     payload.setdefault('usage', {})
     payload.setdefault('analytics', {})
+    payload.setdefault('brand_kits', {})
+    payload.setdefault('library_assets', {})
+    payload.setdefault('social_connections', {})
+    payload.setdefault('publish_records', {})
     return payload
 
   def _save(self, payload: dict[str, Any]) -> None:
@@ -206,6 +218,9 @@ class LocalRepository(Repository):
       caption_style=params.caption_style,
       show_title_card=params.show_title_card,
       cta_text=params.cta_text,
+      # Phase 3
+      auto_approve=params.auto_approve,
+      variant_group_id=params.variant_group_id,
     )
     store['jobs'][job.id] = job.model_dump(mode='json')
     self._save(store)
@@ -447,3 +462,104 @@ class LocalRepository(Repository):
       jobs = [job for job in jobs if job.owner_id == owner_id]
     jobs.sort(key=lambda item: item.updated_at, reverse=True)
     return jobs[:limit]
+
+  # ── Phase 3 — Brand Kit & Asset Library ──────────────────────────────────
+
+  def set_brand_kit(self, owner_id: str, brand_kit: BrandKitRecord) -> BrandKitRecord:
+    store = self._load()
+    store['brand_kits'][owner_id] = brand_kit.model_dump(mode='json')
+    self._save(store)
+    return brand_kit
+
+  def get_brand_kit(self, owner_id: str) -> BrandKitRecord | None:
+    store = self._load()
+    raw = store['brand_kits'].get(owner_id)
+    if not raw:
+      return None
+    return BrandKitRecord.model_validate(raw)
+
+  def delete_brand_kit(self, owner_id: str) -> None:
+    store = self._load()
+    store['brand_kits'].pop(owner_id, None)
+    self._save(store)
+
+  def create_library_asset(self, asset: LibraryAssetRecord) -> LibraryAssetRecord:
+    store = self._load()
+    store['library_assets'][asset.id] = asset.model_dump(mode='json')
+    self._save(store)
+    return asset
+
+  def list_library_assets(self, owner_id: str, asset_type: str | None = None) -> list[LibraryAssetRecord]:
+    store = self._load()
+    assets = [
+      LibraryAssetRecord.model_validate(raw)
+      for raw in store['library_assets'].values()
+      if raw.get('owner_id') == owner_id
+    ]
+    if asset_type:
+      assets = [a for a in assets if a.asset_type == asset_type]
+    assets.sort(key=lambda a: a.created_at, reverse=True)
+    return assets
+
+  def get_library_asset(self, asset_id: str) -> LibraryAssetRecord | None:
+    store = self._load()
+    raw = store['library_assets'].get(asset_id)
+    if not raw:
+      return None
+    return LibraryAssetRecord.model_validate(raw)
+
+  def delete_library_asset(self, asset_id: str) -> None:
+    store = self._load()
+    store['library_assets'].pop(asset_id, None)
+    self._save(store)
+
+  # ── Phase 3 — Social Connections & Publishing ──────────────────────────
+
+  def set_social_connection(self, connection: SocialConnectionRecord) -> SocialConnectionRecord:
+    store = self._load()
+    key = f'{connection.owner_id}:{connection.platform}'
+    store['social_connections'][key] = connection.model_dump(mode='json')
+    self._save(store)
+    return connection
+
+  def get_social_connection(self, owner_id: str, platform: str) -> SocialConnectionRecord | None:
+    store = self._load()
+    key = f'{owner_id}:{platform}'
+    raw = store['social_connections'].get(key)
+    if not raw:
+      return None
+    return SocialConnectionRecord.model_validate(raw)
+
+  def list_social_connections(self, owner_id: str) -> list[SocialConnectionRecord]:
+    store = self._load()
+    connections = [
+      SocialConnectionRecord.model_validate(raw)
+      for raw in store['social_connections'].values()
+      if raw.get('owner_id') == owner_id
+    ]
+    connections.sort(key=lambda c: c.connected_at, reverse=True)
+    return connections
+
+  def delete_social_connection(self, owner_id: str, platform: str) -> None:
+    store = self._load()
+    key = f'{owner_id}:{platform}'
+    store['social_connections'].pop(key, None)
+    self._save(store)
+
+  def create_publish_record(self, record: PublishRecord) -> PublishRecord:
+    store = self._load()
+    store['publish_records'][record.id] = record.model_dump(mode='json')
+    self._save(store)
+    return record
+
+  def list_publish_records(self, owner_id: str, job_id: str | None = None) -> list[PublishRecord]:
+    store = self._load()
+    records = [
+      PublishRecord.model_validate(raw)
+      for raw in store['publish_records'].values()
+      if raw.get('owner_id') == owner_id
+    ]
+    if job_id:
+      records = [r for r in records if r.job_id == job_id]
+    records.sort(key=lambda r: r.published_at, reverse=True)
+    return records

@@ -13,6 +13,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <Link href="/app/dashboard" className="text-sm text-slate-600 hover:text-ink">
               Dashboard
             </Link>
+            <Link href="/app/brand-kit" className="text-sm text-slate-600 hover:text-ink">
+              Brand Kit
+            </Link>
+            <Link href="/app/connections" className="text-sm text-slate-600 hover:text-ink">
+              Connections
+            </Link>
             <Link href="/app/admin" className="text-sm text-slate-600 hover:text-ink">
               Admin
             </Link>

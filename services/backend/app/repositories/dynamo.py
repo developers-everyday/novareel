@@ -9,11 +9,15 @@ from app.config import Settings
 from app.models import (
   AssetRecord,
   AnalyticsEventRecord,
+  BrandKitRecord,
   GenerationJobRecord,
   JobCreateParams,
   JobStatus,
+  LibraryAssetRecord,
   ProjectCreateRequest,
   ProjectRecord,
+  PublishRecord,
+  SocialConnectionRecord,
   UsageSummary,
   VideoResultRecord,
 )
@@ -35,6 +39,10 @@ class DynamoRepository(Repository):
     self._results = dynamodb.Table(settings.dynamodb_results_table)
     self._usage = dynamodb.Table(settings.dynamodb_usage_table)
     self._analytics = dynamodb.Table(settings.dynamodb_analytics_table)
+    self._brand_kits = dynamodb.Table(f"{settings.dynamodb_projects_table}-brand-kits")
+    self._library_assets = dynamodb.Table(f"{settings.dynamodb_projects_table}-library-assets")
+    self._social_connections = dynamodb.Table(f"{settings.dynamodb_projects_table}-social-connections")
+    self._publish_records = dynamodb.Table(f"{settings.dynamodb_projects_table}-publish-records")
 
   @staticmethod
   def _utcnow() -> datetime:
@@ -166,6 +174,9 @@ class DynamoRepository(Repository):
       caption_style=params.caption_style,
       show_title_card=params.show_title_card,
       cta_text=params.cta_text,
+      # Phase 3
+      auto_approve=params.auto_approve,
+      variant_group_id=params.variant_group_id,
     )
     self._jobs.put_item(Item=job.model_dump(mode='json'))
     return job
@@ -381,3 +392,89 @@ class DynamoRepository(Repository):
       jobs = [job for job in jobs if job.owner_id == owner_id]
     jobs.sort(key=lambda item: item.updated_at, reverse=True)
     return jobs[:limit]
+
+  # ── Phase 3 — Brand Kit & Asset Library ──────────────────────────────────
+
+  def set_brand_kit(self, owner_id: str, brand_kit: BrandKitRecord) -> BrandKitRecord:
+    self._brand_kits.put_item(Item=brand_kit.model_dump(mode='json'))
+    return brand_kit
+
+  def get_brand_kit(self, owner_id: str) -> BrandKitRecord | None:
+    response = self._brand_kits.get_item(Key={'owner_id': owner_id})
+    item = response.get('Item')
+    if not item:
+      return None
+    return BrandKitRecord.model_validate(item)
+
+  def delete_brand_kit(self, owner_id: str) -> None:
+    self._brand_kits.delete_item(Key={'owner_id': owner_id})
+
+  def create_library_asset(self, asset: LibraryAssetRecord) -> LibraryAssetRecord:
+    self._library_assets.put_item(Item=asset.model_dump(mode='json'))
+    return asset
+
+  def list_library_assets(self, owner_id: str, asset_type: str | None = None) -> list[LibraryAssetRecord]:
+    response = self._library_assets.scan()
+    assets = [
+      LibraryAssetRecord.model_validate(item)
+      for item in response.get('Items', [])
+      if item.get('owner_id') == owner_id
+    ]
+    if asset_type:
+      assets = [a for a in assets if a.asset_type == asset_type]
+    assets.sort(key=lambda a: a.created_at, reverse=True)
+    return assets
+
+  def get_library_asset(self, asset_id: str) -> LibraryAssetRecord | None:
+    response = self._library_assets.get_item(Key={'id': asset_id})
+    item = response.get('Item')
+    if not item:
+      return None
+    return LibraryAssetRecord.model_validate(item)
+
+  def delete_library_asset(self, asset_id: str) -> None:
+    self._library_assets.delete_item(Key={'id': asset_id})
+
+  # ── Phase 3 — Social Connections & Publishing ──────────────────────────────
+
+  def set_social_connection(self, connection: SocialConnectionRecord) -> SocialConnectionRecord:
+    self._social_connections.put_item(Item=connection.model_dump(mode='json'))
+    return connection
+
+  def get_social_connection(self, owner_id: str, platform: str) -> SocialConnectionRecord | None:
+    response = self._social_connections.scan()
+    for item in response.get('Items', []):
+      if item.get('owner_id') == owner_id and item.get('platform') == platform:
+        return SocialConnectionRecord.model_validate(item)
+    return None
+
+  def list_social_connections(self, owner_id: str) -> list[SocialConnectionRecord]:
+    response = self._social_connections.scan()
+    connections = [
+      SocialConnectionRecord.model_validate(item)
+      for item in response.get('Items', [])
+      if item.get('owner_id') == owner_id
+    ]
+    connections.sort(key=lambda c: c.connected_at, reverse=True)
+    return connections
+
+  def delete_social_connection(self, owner_id: str, platform: str) -> None:
+    conn = self.get_social_connection(owner_id, platform)
+    if conn:
+      self._social_connections.delete_item(Key={'id': conn.id})
+
+  def create_publish_record(self, record: PublishRecord) -> PublishRecord:
+    self._publish_records.put_item(Item=record.model_dump(mode='json'))
+    return record
+
+  def list_publish_records(self, owner_id: str, job_id: str | None = None) -> list[PublishRecord]:
+    response = self._publish_records.scan()
+    records = [
+      PublishRecord.model_validate(item)
+      for item in response.get('Items', [])
+      if item.get('owner_id') == owner_id
+    ]
+    if job_id:
+      records = [r for r in records if r.job_id == job_id]
+    records.sort(key=lambda r: r.published_at, reverse=True)
+    return records

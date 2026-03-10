@@ -1,4 +1,9 @@
-import type { AdminOverview, AnalyticsEventRecord, GenerationJob, Project, UsageSummary, VideoResult } from '@/lib/contracts';
+import type {
+  AdminOverview, AnalyticsEventRecord, GenerationJob, Project, UsageSummary, VideoResult,
+  BrandKit, BrandKitInput, LibraryAsset, LibraryAssetUploadInput, LibraryAssetUploadResponse,
+  MetadataRequest, MetadataResponse, SocialConnection, PublishRequest, PublishRecord,
+  Storyboard, StoryboardScene, GenerateVariantsInput,
+} from '@/lib/contracts';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
 
@@ -96,6 +101,8 @@ export async function generateProject(
     caption_style?: string;
     show_title_card?: boolean;
     cta_text?: string;
+    // Phase 3
+    auto_approve?: boolean;
   },
   token?: string | null
 ): Promise<GenerationJob> {
@@ -170,4 +177,144 @@ export async function getAdminOverview(token?: string | null): Promise<AdminOver
 
 export async function getAdminDeadLetters(token?: string | null): Promise<GenerationJob[]> {
   return apiRequest<GenerationJob[]>('/v1/admin/dead-letters', {}, token);
+}
+
+// ── Phase 3 — Feature A: Brand Kit & Asset Library ──────────────────────
+
+export async function getBrandKit(token?: string | null): Promise<BrandKit> {
+  return apiRequest<BrandKit>('/v1/brand-kit', {}, token);
+}
+
+export async function updateBrandKit(input: BrandKitInput, token?: string | null): Promise<BrandKit> {
+  return apiRequest<BrandKit>('/v1/brand-kit', {
+    method: 'PUT',
+    body: JSON.stringify(input)
+  }, token);
+}
+
+export async function listLibraryAssets(token?: string | null): Promise<LibraryAsset[]> {
+  return apiRequest<LibraryAsset[]>('/v1/library/assets', {}, token);
+}
+
+export async function getLibraryAssetUploadUrl(
+  input: LibraryAssetUploadInput,
+  token?: string | null
+): Promise<LibraryAssetUploadResponse> {
+  return apiRequest<LibraryAssetUploadResponse>('/v1/library/assets', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  }, token);
+}
+
+export async function deleteLibraryAsset(assetId: string, token?: string | null): Promise<void> {
+  await apiRequest<Record<string, string>>(`/v1/library/assets/${assetId}`, {
+    method: 'DELETE'
+  }, token);
+}
+
+// ── Phase 3 — Feature C: Social Media Distribution ──────────────────────
+
+export async function generateMetadata(
+  projectId: string,
+  jobId: string,
+  input: MetadataRequest,
+  token?: string | null
+): Promise<MetadataResponse> {
+  return apiRequest<MetadataResponse>(
+    `/v1/projects/${projectId}/jobs/${jobId}/metadata`,
+    { method: 'POST', body: JSON.stringify(input) },
+    token
+  );
+}
+
+export async function listSocialConnections(token?: string | null): Promise<SocialConnection[]> {
+  return apiRequest<SocialConnection[]>('/v1/social/connections', {}, token);
+}
+
+export async function disconnectSocial(connectionId: string, token?: string | null): Promise<void> {
+  await apiRequest<Record<string, string>>(`/v1/social/connections/${connectionId}`, {
+    method: 'DELETE'
+  }, token);
+}
+
+export function getSocialOAuthUrl(platform: string): string {
+  return `${API_BASE_URL}/v1/social/oauth/${platform}/authorize`;
+}
+
+export async function publishToYouTube(
+  projectId: string,
+  jobId: string,
+  input: PublishRequest,
+  token?: string | null
+): Promise<PublishRecord> {
+  return apiRequest<PublishRecord>(
+    `/v1/projects/${projectId}/jobs/${jobId}/publish/youtube`,
+    { method: 'POST', body: JSON.stringify(input) },
+    token
+  );
+}
+
+// ── Phase 3 — Feature D: Video Editor & Storyboard ─────────────────────
+
+export async function getStoryboard(
+  projectId: string,
+  jobId: string,
+  token?: string | null
+): Promise<Storyboard> {
+  return apiRequest<Storyboard>(
+    `/v1/projects/${projectId}/jobs/${jobId}/storyboard`,
+    {},
+    token
+  );
+}
+
+export async function updateStoryboard(
+  projectId: string,
+  jobId: string,
+  scenes: StoryboardScene[],
+  token?: string | null
+): Promise<Storyboard> {
+  return apiRequest<Storyboard>(
+    `/v1/projects/${projectId}/jobs/${jobId}/storyboard`,
+    { method: 'PUT', body: JSON.stringify({ scenes }) },
+    token
+  );
+}
+
+export async function approveStoryboard(
+  projectId: string,
+  jobId: string,
+  token?: string | null
+): Promise<GenerationJob> {
+  return apiRequest<GenerationJob>(
+    `/v1/projects/${projectId}/jobs/${jobId}/storyboard/approve`,
+    { method: 'POST' },
+    token
+  );
+}
+
+export async function previewStoryboardAudio(
+  projectId: string,
+  jobId: string,
+  token?: string | null
+): Promise<{ audio_url: string }> {
+  return apiRequest<{ audio_url: string }>(
+    `/v1/projects/${projectId}/jobs/${jobId}/storyboard/preview-audio`,
+    { method: 'POST' },
+    token
+  );
+}
+
+// ── Phase 3 — Feature E: A/B Video Variants ────────────────────────────
+
+export async function generateVariants(
+  projectId: string,
+  input: GenerateVariantsInput,
+  token?: string | null
+): Promise<GenerationJob[]> {
+  return apiRequest<GenerationJob[]>(
+    `/v1/projects/${projectId}/generate-variants`,
+    { method: 'POST', body: JSON.stringify(input) },
+    token
+  );
 }

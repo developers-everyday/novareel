@@ -6,20 +6,27 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   createProject,
   generateProject,
+  generateVariants,
   getJob,
   getProjectResult,
+  getStoryboard,
   getUploadUrl,
   getUsage,
+  approveStoryboard,
+  updateStoryboard,
+  generateMetadata,
+  publishToYouTube,
   listProjectJobs,
   listProjects,
+  listSocialConnections,
   trackAnalyticsEvent,
   translateProject,
   uploadAsset
 } from '@/lib/api';
-import type { GenerationJob, Project, UsageSummary, VideoResult } from '@/lib/contracts';
+import type { GenerationJob, Project, UsageSummary, VideoResult, StoryboardScene, SocialConnection, MetadataResponse } from '@/lib/contracts';
 import { JobStatusCard } from '@/components/job-status-card';
 
-const pollableStatuses = new Set<GenerationJob['status']>(['queued', 'analyzing', 'scripting', 'matching', 'narration', 'rendering', 'loading', 'translating']);
+const pollableStatuses = new Set<GenerationJob['status']>(['queued', 'analyzing', 'scripting', 'matching', 'narration', 'rendering', 'loading', 'translating', 'awaiting_approval']);
 
 const SUPPORTED_LANGUAGES = [
   { code: 'en', label: 'English' },
@@ -87,6 +94,21 @@ export function ProjectStudio() {
   const [csatSent, setCsatSent] = useState(false);
   const [previewTracked, setPreviewTracked] = useState(false);
 
+  // Phase 3 state
+  const [autoApprove, setAutoApprove] = useState(true);
+  const [storyboardScenes, setStoryboardScenes] = useState<StoryboardScene[]>([]);
+  const [showStoryboardEditor, setShowStoryboardEditor] = useState(false);
+  const [showPublishModal, setShowPublishModal] = useState(false);
+  const [publishTitle, setPublishTitle] = useState('');
+  const [publishDescription, setPublishDescription] = useState('');
+  const [publishTags, setPublishTags] = useState('');
+  const [publishPrivacy, setPublishPrivacy] = useState<'public' | 'unlisted' | 'private'>('private');
+  const [publishing, setPublishing] = useState(false);
+  const [generatingMetadata, setGeneratingMetadata] = useState(false);
+  const [showVariantsModal, setShowVariantsModal] = useState(false);
+  const [variantCount, setVariantCount] = useState(3);
+  const [generatingVariants, setGeneratingVariants] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -141,6 +163,17 @@ export function ProjectStudio() {
         setResult(nextResult);
         const summary = await getUsage(token);
         setUsage(summary);
+      }
+
+      // Phase 3: Load storyboard when awaiting approval
+      if (nextJob.status === 'awaiting_approval' && projectId) {
+        try {
+          const sb = await getStoryboard(projectId, nextJob.id, token);
+          setStoryboardScenes(sb.scenes || []);
+          setShowStoryboardEditor(true);
+        } catch {
+          // Storyboard may not be ready yet
+        }
       }
     }
 
@@ -227,6 +260,7 @@ export function ProjectStudio() {
           transition_style: transitionStyle,
           show_title_card: showTitleCard,
           cta_text: ctaText || undefined,
+          auto_approve: autoApprove,
         },
         token
       );
@@ -311,6 +345,92 @@ export function ProjectStudio() {
     setTranslateLanguages((prev) =>
       prev.includes(lang) ? prev.filter((l) => l !== lang) : [...prev, lang]
     );
+  }
+
+  // Phase 3: Storyboard scene edit handler
+  function onSceneScriptChange(order: number, newLine: string) {
+    setStoryboardScenes((prev) =>
+      prev.map((s) => (s.order === order ? { ...s, script_line: newLine } : s))
+    );
+  }
+
+  async function onStoryboardApprove() {
+    if (!projectId || !job) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      // Save edits first
+      await updateStoryboard(projectId, job.id, storyboardScenes, token);
+      // Approve → resume pipeline
+      const resumed = await approveStoryboard(projectId, job.id, token);
+      setJob(resumed);
+      setShowStoryboardEditor(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Storyboard approval failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onGenerateMetadata() {
+    if (!projectId || !job) return;
+    setGeneratingMetadata(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      const meta = await generateMetadata(projectId, job.id, { platforms: ['youtube'] }, token);
+      if (meta.youtube) {
+        const yt = meta.youtube as Record<string, string>;
+        setPublishTitle(yt.title || '');
+        setPublishDescription(yt.description || '');
+        setPublishTags((yt.tags as unknown as string[] || []).join(', '));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Metadata generation failed');
+    } finally {
+      setGeneratingMetadata(false);
+    }
+  }
+
+  async function onPublishYouTube() {
+    if (!projectId || !job) return;
+    setPublishing(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      const record = await publishToYouTube(projectId, job.id, {
+        title: publishTitle,
+        description: publishDescription,
+        tags: publishTags.split(',').map((t) => t.trim()).filter(Boolean),
+        privacy: publishPrivacy,
+      }, token);
+      setShowPublishModal(false);
+      alert(`Published! YouTube URL: ${record.platform_url}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Publishing failed');
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  async function onGenerateVariants() {
+    if (!projectId) return;
+    setGeneratingVariants(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      const variantJobs = await generateVariants(projectId, { variant_count: variantCount }, token);
+      setShowVariantsModal(false);
+      if (variantJobs.length > 0) {
+        setJob(variantJobs[0]);
+      }
+      await refreshSideData(projectId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Variant generation failed');
+    } finally {
+      setGeneratingVariants(false);
+    }
   }
 
   async function onTranslateSubmit() {
@@ -552,6 +672,18 @@ export function ProjectStudio() {
           </label>
         </div>
 
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              className="rounded border-slate-300"
+              checked={!autoApprove}
+              onChange={(event) => setAutoApprove(!event.target.checked)}
+            />
+            Review storyboard before rendering
+          </label>
+        </div>
+
         <label className="block text-sm font-medium text-slate-700">
           Brand colors (comma-separated)
           <input
@@ -610,6 +742,44 @@ export function ProjectStudio() {
 
         {job ? <JobStatusCard job={job} /> : null}
 
+        {showStoryboardEditor && job?.status === 'awaiting_approval' && storyboardScenes.length > 0 ? (
+          <section className="surface p-5">
+            <h3 className="text-lg font-semibold text-ink">Edit Storyboard</h3>
+            <p className="mt-1 text-sm text-slate-600">Review and edit your script lines before rendering. Reorder or tweak narration text.</p>
+            <div className="mt-4 space-y-3">
+              {storyboardScenes.map((scene) => (
+                <div key={scene.order} className="rounded-lg border border-slate-200 p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600">
+                      {scene.order}
+                    </span>
+                    <span className="text-xs text-slate-500">
+                      {scene.start_sec.toFixed(1)}s &ndash; {(scene.start_sec + scene.duration_sec).toFixed(1)}s
+                      {scene.media_type === 'video' ? ' (B-roll)' : ''}
+                    </span>
+                  </div>
+                  <textarea
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    rows={2}
+                    value={scene.script_line}
+                    onChange={(e) => onSceneScriptChange(scene.order, e.target.value)}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onStoryboardApprove().catch(() => undefined)}
+                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-60"
+              >
+                {busy ? 'Approving...' : 'Approve & Render'}
+              </button>
+            </div>
+          </section>
+        ) : null}
+
         {result ? (
           <section className="surface p-5">
             <h3 className="text-lg font-semibold text-ink">Latest render</h3>
@@ -653,13 +823,29 @@ export function ProjectStudio() {
                 </a>
               ) : null}
               {job && job.status === 'completed' && job.job_type !== 'translation' ? (
-                <button
-                  type="button"
-                  onClick={() => setShowTranslateModal(true)}
-                  className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                >
-                  🌐 Translate
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShowTranslateModal(true)}
+                    className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                  >
+                    Translate
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowPublishModal(true); onGenerateMetadata().catch(() => undefined); }}
+                    className="rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700"
+                  >
+                    Publish
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowVariantsModal(true)}
+                    className="rounded-lg bg-purple-600 px-3 py-2 text-sm font-medium text-white hover:bg-purple-700"
+                  >
+                    A/B Variants
+                  </button>
+                </>
               ) : null}
             </div>
             {result.language && result.language !== 'en' ? (
@@ -723,6 +909,113 @@ export function ProjectStudio() {
               <button
                 type="button"
                 onClick={() => setShowTranslateModal(false)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {showPublishModal ? (
+          <section className="surface p-5">
+            <h3 className="text-lg font-semibold text-ink">Publish to YouTube</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              {generatingMetadata ? 'Generating metadata with AI...' : 'Edit metadata and publish your video.'}
+            </p>
+            <div className="mt-3 grid gap-3">
+              <label className="block text-sm font-medium text-slate-700">
+                Title
+                <input
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                  value={publishTitle}
+                  onChange={(e) => setPublishTitle(e.target.value)}
+                  placeholder="Video title"
+                  maxLength={100}
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-700">
+                Description
+                <textarea
+                  className="mt-1 min-h-20 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  value={publishDescription}
+                  onChange={(e) => setPublishDescription(e.target.value)}
+                  placeholder="Video description"
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-700">
+                Tags (comma-separated)
+                <input
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                  value={publishTags}
+                  onChange={(e) => setPublishTags(e.target.value)}
+                  placeholder="product, marketing, demo"
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-700">
+                Privacy
+                <select
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                  value={publishPrivacy}
+                  onChange={(e) => setPublishPrivacy(e.target.value as 'public' | 'unlisted' | 'private')}
+                >
+                  <option value="private">Private</option>
+                  <option value="unlisted">Unlisted</option>
+                  <option value="public">Public</option>
+                </select>
+              </label>
+            </div>
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                disabled={publishing || !publishTitle.trim()}
+                onClick={() => onPublishYouTube().catch(() => undefined)}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60"
+              >
+                {publishing ? 'Publishing...' : 'Publish to YouTube'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowPublishModal(false)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {showVariantsModal ? (
+          <section className="surface p-5">
+            <h3 className="text-lg font-semibold text-ink">Generate A/B Variants</h3>
+            <p className="mt-1 text-sm text-slate-600">Create multiple video variants with different styles for A/B testing.</p>
+            <div className="mt-3">
+              <label className="block text-sm font-medium text-slate-700">
+                Number of variants
+                <select
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                  value={variantCount}
+                  onChange={(e) => setVariantCount(Number(e.target.value))}
+                >
+                  <option value={2}>2 variants</option>
+                  <option value={3}>3 variants</option>
+                  <option value={4}>4 variants</option>
+                  <option value={5}>5 variants</option>
+                </select>
+              </label>
+            </div>
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                disabled={generatingVariants}
+                onClick={() => onGenerateVariants().catch(() => undefined)}
+                className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-60"
+              >
+                {generatingVariants ? 'Generating...' : `Generate ${variantCount} variants`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowVariantsModal(false)}
                 className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
               >
                 Cancel

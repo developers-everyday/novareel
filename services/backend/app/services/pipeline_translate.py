@@ -179,22 +179,30 @@ def process_translation_job(
 
         timings['rendering_sec'] = round(time.perf_counter() - phase_start, 3)
 
+        # Phase 3 Feature F — CDN URL support
+        from app.config import get_settings as _get_settings
+        _settings = _get_settings()
+        def _public_url(key: str) -> str:
+          if _settings.cdn_base_url:
+            return f'{_settings.cdn_base_url.rstrip("/")}/{key}'
+          return storage.get_public_url(key)
+
         result = VideoResultRecord(
-            project_id=project.id,
-            job_id=job.id,
-            video_s3_key=video_key,
-            video_url=storage.get_public_url(video_key),
-            duration_sec=duration_sec,
-            resolution=resolution,
-            thumbnail_key=thumbnail_key,
-            transcript_key=transcript_key,
-            transcript_url=transcript_url,
-            subtitle_key=subtitle_key,
-            subtitle_url=storage.get_public_url(subtitle_key),
-            storyboard=translated_storyboard,
-            script_lines=translated_lines,
-            language=job.language,
-            completed_at=datetime.now(UTC),
+          project_id=project.id,
+          job_id=job.id,
+          video_s3_key=video_key,
+          video_url=_public_url(video_key),
+          duration_sec=duration_sec,
+          resolution=resolution,
+          thumbnail_key=thumbnail_key,
+          transcript_key=transcript_key,
+          transcript_url=_public_url(transcript_key),
+          subtitle_key=subtitle_key,
+          subtitle_url=_public_url(subtitle_key),
+          storyboard=translated_storyboard,
+          script_lines=translated_lines,
+          language=job.language,
+          completed_at=datetime.now(UTC),
         )
 
         repo.set_result(project.id, job.id, result)

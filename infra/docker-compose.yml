@@ -27,6 +27,16 @@ services:
       NOVAREEL_QUEUE_BACKEND: poll
       NOVAREEL_USE_MOCK_AI: 'true'
       NOVAREEL_PUBLIC_API_BASE_URL: http://localhost:8000
+      NOVAREEL_WORKER_MODE: polling
+      NOVAREEL_CELERY_BROKER_URL: redis://redis:6379/0
+      NOVAREEL_FFMPEG_PRESET: medium
+      NOVAREEL_CDN_BASE_URL: ''
+      NOVAREEL_GOOGLE_CLIENT_ID: ''
+      NOVAREEL_GOOGLE_CLIENT_SECRET: ''
+      NOVAREEL_SOCIAL_REDIRECT_BASE_URL: http://localhost:8000
+      NOVAREEL_ENCRYPTION_KEY: ''
+    depends_on:
+      - redis
 
   worker:
     image: python:3.12-slim
@@ -40,5 +50,39 @@ services:
       NOVAREEL_QUEUE_BACKEND: poll
       NOVAREEL_USE_MOCK_AI: 'true'
       NOVAREEL_PUBLIC_API_BASE_URL: http://localhost:8000
+      NOVAREEL_WORKER_MODE: polling
+      NOVAREEL_CELERY_BROKER_URL: redis://redis:6379/0
+      NOVAREEL_FFMPEG_PRESET: medium
     depends_on:
       - api
+      - redis
+
+  celery-worker:
+    image: python:3.12-slim
+    working_dir: /workspace/services/backend
+    command: sh -c "pip install -e . && python worker.py --mode=celery"
+    volumes:
+      - ..:/workspace
+    environment:
+      NOVAREEL_AUTH_DISABLED: 'true'
+      NOVAREEL_STORAGE_BACKEND: local
+      NOVAREEL_QUEUE_BACKEND: poll
+      NOVAREEL_USE_MOCK_AI: 'true'
+      NOVAREEL_PUBLIC_API_BASE_URL: http://localhost:8000
+      NOVAREEL_WORKER_MODE: celery
+      NOVAREEL_CELERY_BROKER_URL: redis://redis:6379/0
+      NOVAREEL_FFMPEG_PRESET: medium
+    depends_on:
+      - redis
+    profiles:
+      - celery
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:

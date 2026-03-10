@@ -17,6 +17,8 @@ class JobStatus(str, Enum):
   # Phase 2 — Feature A (Translation)
   LOADING = 'loading'
   TRANSLATING = 'translating'
+  # Phase 3 — Feature D (Storyboard Editor)
+  AWAITING_APPROVAL = 'awaiting_approval'
 
 
 class ProjectCreateRequest(BaseModel):
@@ -109,6 +111,9 @@ class JobCreateParams(BaseModel):
   cta_text: str | None = None
   job_type: str = 'generation'
   source_job_id: str | None = None
+  # Phase 3
+  auto_approve: bool = True
+  variant_group_id: str | None = None
 
 
 class GenerationJobRecord(BaseModel):
@@ -143,6 +148,9 @@ class GenerationJobRecord(BaseModel):
   caption_style: str = 'none'
   show_title_card: bool = False
   cta_text: str | None = None
+  # Phase 3
+  auto_approve: bool = True
+  variant_group_id: str | None = None
 
 
 class StoryboardSegment(BaseModel):
@@ -212,3 +220,107 @@ class AdminOverview(BaseModel):
   videos_generated: int
   recent_jobs: list[GenerationJobRecord] = Field(default_factory=list)
   recent_events: list[AnalyticsEventRecord] = Field(default_factory=list)
+
+
+# ── Phase 3 — Feature A: Brand Kit & Asset Library ──────────────────────────
+
+class BrandKitRequest(BaseModel):
+  """Request body for POST /v1/brand-kit."""
+  brand_name: str = ''
+  primary_color: str = '#1E40AF'
+  secondary_color: str = '#F59E0B'
+  accent_color: str = '#10B981'
+  logo_asset_id: str | None = None
+  font_asset_id: str | None = None
+  intro_clip_asset_id: str | None = None
+  outro_clip_asset_id: str | None = None
+  custom_music_asset_ids: list[str] = Field(default_factory=list)
+
+
+class BrandKitRecord(BaseModel):
+  owner_id: str
+  brand_name: str = ''
+  primary_color: str = '#1E40AF'
+  secondary_color: str = '#F59E0B'
+  accent_color: str = '#10B981'
+  logo_asset_id: str | None = None
+  font_asset_id: str | None = None
+  intro_clip_asset_id: str | None = None
+  outro_clip_asset_id: str | None = None
+  custom_music_asset_ids: list[str] = Field(default_factory=list)
+  updated_at: datetime
+
+
+class LibraryAssetUploadRequest(BaseModel):
+  """Request body for POST /v1/library/assets."""
+  filename: str = Field(min_length=1, max_length=255)
+  asset_type: Literal['logo', 'font', 'intro_clip', 'outro_clip', 'music', 'image']
+  content_type: str = 'image/png'
+  file_size: int = Field(ge=1)
+
+
+class LibraryAssetRecord(BaseModel):
+  id: str
+  owner_id: str
+  asset_type: Literal['logo', 'font', 'intro_clip', 'outro_clip', 'music', 'image']
+  filename: str
+  content_type: str
+  file_size: int
+  object_key: str
+  created_at: datetime
+
+
+# ── Phase 3 — Feature C: Social Media Distribution ──────────────────────────
+
+class MetadataRequest(BaseModel):
+  """Request body for POST /v1/projects/{project_id}/jobs/{job_id}/metadata."""
+  platforms: list[Literal['youtube', 'tiktok', 'instagram']] = Field(default_factory=lambda: ['youtube'])
+  product_keywords: list[str] = Field(default_factory=list)
+
+
+class MetadataResponse(BaseModel):
+  """Response for metadata generation endpoint."""
+  youtube: dict[str, Any] | None = None
+  tiktok: dict[str, Any] | None = None
+  instagram: dict[str, Any] | None = None
+
+
+class SocialConnectionRecord(BaseModel):
+  id: str
+  owner_id: str
+  platform: Literal['youtube', 'tiktok', 'instagram']
+  platform_user_id: str
+  platform_username: str
+  encrypted_access_token: str
+  encrypted_refresh_token: str
+  token_expires_at: datetime
+  connected_at: datetime
+
+
+class PublishRequest(BaseModel):
+  """Request body for POST /v1/projects/{project_id}/jobs/{job_id}/publish/youtube."""
+  title: str = Field(min_length=1, max_length=100)
+  description: str = ''
+  tags: list[str] = Field(default_factory=list)
+  category: str = 'Science & Technology'
+  privacy: Literal['public', 'unlisted', 'private'] = 'private'
+
+
+class PublishRecord(BaseModel):
+  id: str
+  owner_id: str
+  job_id: str
+  platform: str
+  platform_video_id: str
+  platform_url: str
+  metadata_used: dict[str, Any] = Field(default_factory=dict)
+  published_at: datetime
+
+
+# ── Phase 3 — Feature E: A/B Video Variants ─────────────────────────────────
+
+class GenerateVariantsRequest(BaseModel):
+  """Request body for POST /v1/projects/{project_id}/generate-variants."""
+  variant_count: int = Field(default=3, ge=2, le=5)
+  shared: dict[str, Any] = Field(default_factory=dict)
+  overrides: list[dict[str, Any]] = Field(default_factory=list)

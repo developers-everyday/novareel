@@ -103,70 +103,27 @@ class VideoService:
       seg_paths: list[Path] = []
       seg_durations: list[float] = []
 
+      # Classify segments into B-roll (sequential) and image (parallel-eligible)
+      image_segments: list[tuple[int, StoryboardSegment]] = []
+      broll_segments: list[tuple[int, StoryboardSegment]] = []
       for idx, segment in enumerate(storyboard):
+        if segment.media_type == 'video' and segment.video_path:
+          broll_segments.append((idx, segment))
+        else:
+          image_segments.append((idx, segment))
+
+      # Dict to collect rendered paths keyed by segment index
+      rendered: dict[int, tuple[Path, float]] = {}
+
+      # ── Phase 1: Render B-roll segments sequentially ──────────────────
+      for idx, segment in broll_segments:
         seg_video = temp_root / f'seg_{idx:03d}.mp4'
         seg_duration = segment.duration_sec
         fps = 24
-        total_frames = int(fps * seg_duration)
+        broll_path = Path(segment.video_path)
+        if broll_path.exists() and broll_path.stat().st_size > 100:
+          vf = f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1'
 
-        # Check if this is a video segment (B-roll) or image segment
-        if segment.media_type == 'video' and segment.video_path:
-          # ── VIDEO SEGMENT (B-roll from stock footage) ──
-          broll_path = Path(segment.video_path)
-          if broll_path.exists() and broll_path.stat().st_size > 100:
-            # Scale and trim the video clip to match target resolution and duration
-            vf = f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1'
-
-            # Add burned-in subtitles if not using ASS
-            if has_drawtext and segment.script_line and not ass_subtitle_path:
-              escaped_text = segment.script_line.replace("'", "\u2019").replace(":", "\\:")
-              vf += (
-                f",drawtext=text='{escaped_text}'"
-                f":fontsize=36:fontcolor=white:borderw=3:bordercolor=black"
-                f":x=(w-text_w)/2:y=h-80"
-              )
-
-            cmd = [
-              ffmpeg_path, '-y',
-              '-i', str(broll_path),
-              '-vf', vf,
-              '-t', str(seg_duration),
-              '-c:v', 'libx264',
-              '-preset', 'fast',
-              '-pix_fmt', 'yuv420p',
-              '-an',  # Remove audio from B-roll (we use narration)
-              '-r', str(fps),
-              str(seg_video),
-            ]
-
-            result = subprocess.run(cmd, check=False, capture_output=True)
-            if result.returncode != 0:
-              err = result.stderr.decode('utf-8', errors='replace')
-              logger.warning('ffmpeg video segment %d failed: %s', idx, err[-300:])
-              # Fall back to image rendering for this segment
-              segment = segment.model_copy(update={'media_type': 'image', 'video_path': None})
-            else:
-              seg_paths.append(seg_video)
-              seg_durations.append(seg_duration)
-              continue  # Skip to next segment
-
-        # ── IMAGE SEGMENT (product images with Ken Burns) ──
-        asset_path = self._resolve_asset_path(segment.image_asset_id, project.id)
-
-        if asset_path and asset_path.exists():
-          # --- Ken Burns effect: alternate zoom-in / zoom-out ---
-          if idx % 2 == 0:
-            zoom_expr = f"min(zoom+0.0015,1.3)"
-          else:
-            zoom_expr = f"if(eq(on\\,1)\\,1.3\\,max(zoom-0.0015\\,1.0))"
-
-          vf = (
-            f'scale=8000:-1,'
-            f"zoompan=z='{zoom_expr}':d={total_frames}:s={width}x{height}:fps={fps},"
-            f'setsar=1'
-          )
-
-          # --- Burned-in subtitles (only when NOT using ASS captions) ---
           if has_drawtext and segment.script_line and not ass_subtitle_path:
             escaped_text = segment.script_line.replace("'", "\u2019").replace(":", "\\:")
             vf += (
@@ -175,32 +132,121 @@ class VideoService:
               f":x=(w-text_w)/2:y=h-80"
             )
 
-          input_args = ['-i', str(asset_path)]
-        else:
-          logger.info('Segment %d: no image found, using color background', idx)
-          vf = 'setsar=1'
-          input_args = ['-f', 'lavfi', '-i', f'color=c=#0f172a:s={resolution}:d={seg_duration}']
+          cmd = [
+            ffmpeg_path, '-y',
+            '-i', str(broll_path),
+            '-vf', vf,
+            '-t', str(seg_duration),
+            '-c:v', 'libx264',
+            '-preset', self._settings.ffmpeg_preset,
+            '-pix_fmt', 'yuv420p',
+            '-an',
+            '-r', str(fps),
+            str(seg_video),
+          ]
 
-        cmd = [
-          ffmpeg_path, '-y',
-          *input_args,
-          '-vf', vf,
-          '-t', str(seg_duration),
-          '-c:v', 'libx264',
-          '-preset', 'fast',
-          '-pix_fmt', 'yuv420p',
-          '-r', str(fps),
-          str(seg_video),
-        ]
+          result = subprocess.run(cmd, check=False, capture_output=True)
+          if result.returncode != 0:
+            err = result.stderr.decode('utf-8', errors='replace')
+            logger.warning('ffmpeg video segment %d failed: %s', idx, err[-300:])
+            # Fall back to image rendering for this segment
+            image_segments.append((idx, segment.model_copy(update={'media_type': 'image', 'video_path': None})))
+            image_segments.sort(key=lambda x: x[0])
+          else:
+            rendered[idx] = (seg_video, seg_duration)
 
-        result = subprocess.run(cmd, check=False, capture_output=True)
-        if result.returncode != 0:
-          err = result.stderr.decode('utf-8', errors='replace')
-          err_lines = [l for l in err.splitlines() if not l.startswith('  ') and l.strip()]
-          logger.warning('ffmpeg segment %d failed: %s', idx, '\n'.join(err_lines[-6:]))
-        else:
-          seg_paths.append(seg_video)
-          seg_durations.append(seg_duration)
+      # ── Phase 2: Render image segments (parallel when ≥ 3) ───────────
+      use_parallel = len(image_segments) >= 3
+      if use_parallel:
+        from app.services.parallel import SegmentRenderTask, render_segments_parallel
+        parallel_tasks: list[SegmentRenderTask] = []
+        for idx, segment in image_segments:
+          seg_video = temp_root / f'seg_{idx:03d}.mp4'
+          asset_path = self._resolve_asset_path(segment.image_asset_id, project.id)
+          if asset_path and asset_path.exists():
+            parallel_tasks.append(SegmentRenderTask(
+              segment_index=idx,
+              image_path=str(asset_path),
+              duration=segment.duration_sec,
+              aspect_ratio=aspect_ratio,
+              output_path=str(seg_video),
+              ken_burns=True,
+              ffmpeg_preset=self._settings.ffmpeg_preset,
+            ))
+          else:
+            # Render color placeholder sequentially
+            self._render_color_segment(ffmpeg_path, seg_video, resolution, segment.duration_sec, self._settings.ffmpeg_preset)
+            if seg_video.exists():
+              rendered[idx] = (seg_video, segment.duration_sec)
+
+        if parallel_tasks:
+          results = render_segments_parallel(parallel_tasks)
+          for r in results:
+            if r.success and Path(r.output_path).exists():
+              seg = next(s for i, s in image_segments if i == r.segment_index)
+              rendered[r.segment_index] = (Path(r.output_path), seg.duration_sec)
+            else:
+              logger.warning('Parallel segment %d failed: %s', r.segment_index, r.error[:200])
+      else:
+        # Sequential rendering for image segments (< 3 segments or fallback)
+        for idx, segment in image_segments:
+          seg_video = temp_root / f'seg_{idx:03d}.mp4'
+          seg_duration = segment.duration_sec
+          fps = 24
+          total_frames = int(fps * seg_duration)
+
+          asset_path = self._resolve_asset_path(segment.image_asset_id, project.id)
+          if asset_path and asset_path.exists():
+            if idx % 2 == 0:
+              zoom_expr = f"min(zoom+0.0015,1.3)"
+            else:
+              zoom_expr = f"if(eq(on\\,1)\\,1.3\\,max(zoom-0.0015\\,1.0))"
+
+            vf = (
+              f'scale=8000:-1,'
+              f"zoompan=z='{zoom_expr}':d={total_frames}:s={width}x{height}:fps={fps},"
+              f'setsar=1'
+            )
+
+            if has_drawtext and segment.script_line and not ass_subtitle_path:
+              escaped_text = segment.script_line.replace("'", "\u2019").replace(":", "\\:")
+              vf += (
+                f",drawtext=text='{escaped_text}'"
+                f":fontsize=36:fontcolor=white:borderw=3:bordercolor=black"
+                f":x=(w-text_w)/2:y=h-80"
+              )
+
+            input_args = ['-i', str(asset_path)]
+          else:
+            logger.info('Segment %d: no image found, using color background', idx)
+            vf = 'setsar=1'
+            input_args = ['-f', 'lavfi', '-i', f'color=c=#0f172a:s={resolution}:d={seg_duration}']
+
+          cmd = [
+            ffmpeg_path, '-y',
+            *input_args,
+            '-vf', vf,
+            '-t', str(seg_duration),
+            '-c:v', 'libx264',
+            '-preset', self._settings.ffmpeg_preset,
+            '-pix_fmt', 'yuv420p',
+            '-r', str(fps),
+            str(seg_video),
+          ]
+
+          result = subprocess.run(cmd, check=False, capture_output=True)
+          if result.returncode != 0:
+            err = result.stderr.decode('utf-8', errors='replace')
+            err_lines = [l for l in err.splitlines() if not l.startswith('  ') and l.strip()]
+            logger.warning('ffmpeg segment %d failed: %s', idx, '\n'.join(err_lines[-6:]))
+          else:
+            rendered[idx] = (seg_video, seg_duration)
+
+      # Reassemble in original order
+      for idx in sorted(rendered.keys()):
+        path, dur = rendered[idx]
+        seg_paths.append(path)
+        seg_durations.append(dur)
 
       if not seg_paths:
         logger.error('No segment videos rendered; storing placeholder')
@@ -213,6 +259,7 @@ class VideoService:
           ffmpeg_path, temp_root, seg_paths, seg_durations,
           effects_config.transition.xfade_name,
           effects_config.transition.duration,
+          ffmpeg_preset=self._settings.ffmpeg_preset,
         )
         # Fallback to concat if xfade fails
         if joined_video is None:
@@ -225,14 +272,29 @@ class VideoService:
         storage.store_bytes(output_key, b'Fallback render output', content_type='video/mp4')
         return output_key, duration_sec, resolution, None
 
+      # ── Stitch intro/outro clips (Phase 3 — Brand Kit) ─────────────────
+      joined_video = self._stitch_intro_outro(
+        ffmpeg_path, temp_root, joined_video, effects_config,
+      )
+
       # ── Apply text overlays (title card + CTA) ─────────────────────────
       total_video_duration = sum(seg_durations)
       overlaid = self._apply_text_overlays(
         ffmpeg_path, temp_root, joined_video, effects_config,
         has_drawtext, total_video_duration,
+        ffmpeg_preset=self._settings.ffmpeg_preset,
       )
       if overlaid:
         joined_video = overlaid
+
+      # ── Logo watermark overlay (Phase 3 — Brand Kit) ───────────────────
+      if effects_config.logo_path and Path(effects_config.logo_path).exists():
+        logo_overlaid = self._apply_logo_watermark(
+          ffmpeg_path, temp_root, joined_video, Path(effects_config.logo_path),
+          int(width), int(height), ffmpeg_preset=self._settings.ffmpeg_preset,
+        )
+        if logo_overlaid:
+          joined_video = logo_overlaid
 
       # ── Burn ASS subtitles if provided ──────────────────────────────────
       if ass_subtitle_path and ass_subtitle_path.exists() and has_ass:
@@ -241,7 +303,7 @@ class VideoService:
           ffmpeg_path, '-y',
           '-i', str(joined_video),
           '-vf', f"ass='{ass_subtitle_path}'",
-          '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'copy',
+          '-c:v', 'libx264', '-preset', self._settings.ffmpeg_preset, '-c:a', 'copy',
           str(subtitled),
         ]
         sub_result = subprocess.run(sub_cmd, check=False, capture_output=True)
@@ -328,6 +390,7 @@ class VideoService:
     ffmpeg_path: str, temp_root: Path,
     seg_paths: list[Path], seg_durations: list[float],
     xfade_name: str, transition_duration: float,
+    ffmpeg_preset: str = 'medium',
   ) -> Path | None:
     """Join segments using xfade filter for smooth transitions.
 
@@ -371,7 +434,7 @@ class VideoService:
       *input_args,
       '-filter_complex', filter_graph,
       '-map', '[vout]',
-      '-c:v', 'libx264', '-preset', 'fast', '-pix_fmt', 'yuv420p',
+      '-c:v', 'libx264', '-preset', ffmpeg_preset, '-pix_fmt', 'yuv420p',
       str(xfade_video),
     ]
 
@@ -387,12 +450,18 @@ class VideoService:
     ffmpeg_path: str, temp_root: Path, input_video: Path,
     effects_config: VideoEffectsConfig, has_drawtext: bool,
     total_duration: float,
+    ffmpeg_preset: str = 'medium',
   ) -> Path | None:
     """Apply title card and CTA drawtext overlays if configured."""
     if not has_drawtext:
       return None
 
     filters: list[str] = []
+
+    # Phase 3 — use brand font if available
+    font_file_arg = ''
+    if effects_config.brand_font_path and Path(effects_config.brand_font_path).exists():
+      font_file_arg = f":fontfile='{effects_config.brand_font_path}'"
 
     if effects_config.title_overlay:
       t = effects_config.title_overlay
@@ -401,6 +470,7 @@ class VideoService:
         f":fontsize={t.font_size}:fontcolor={t.font_color}"
         f":borderw={t.border_width}:bordercolor={t.border_color}"
         f":x={t.x}:y={t.y}"
+        f"{font_file_arg}"
         f":enable='between(t,{t.start_sec},{t.start_sec + t.duration_sec})'"
       )
 
@@ -412,6 +482,7 @@ class VideoService:
         f":fontsize={c.font_size}:fontcolor={c.font_color}"
         f":borderw={c.border_width}:bordercolor={c.border_color}"
         f":x={c.x}:y={c.y}"
+        f"{font_file_arg}"
         f":enable='between(t,{cta_start},{cta_start + c.duration_sec})'"
       )
 
@@ -423,7 +494,7 @@ class VideoService:
       ffmpeg_path, '-y',
       '-i', str(input_video),
       '-vf', ','.join(filters),
-      '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'copy',
+      '-c:v', 'libx264', '-preset', ffmpeg_preset, '-c:a', 'copy',
       str(overlaid),
     ]
 
@@ -432,3 +503,86 @@ class VideoService:
       logger.warning('Text overlay failed, continuing without overlays')
       return None
     return overlaid if overlaid.exists() else None
+
+  @staticmethod
+  def _render_color_segment(
+    ffmpeg_path: str, output: Path, resolution: str, duration: float,
+    ffmpeg_preset: str = 'medium',
+  ) -> None:
+    """Render a solid-color placeholder segment."""
+    cmd = [
+      ffmpeg_path, '-y',
+      '-f', 'lavfi', '-i', f'color=c=#0f172a:s={resolution}:d={duration}',
+      '-vf', 'setsar=1',
+      '-t', str(duration),
+      '-c:v', 'libx264', '-preset', ffmpeg_preset, '-pix_fmt', 'yuv420p',
+      '-r', '24',
+      str(output),
+    ]
+    subprocess.run(cmd, check=False, capture_output=True)
+
+  @staticmethod
+  def _apply_logo_watermark(
+    ffmpeg_path: str, temp_root: Path, input_video: Path,
+    logo_path: Path, video_width: int, video_height: int,
+    ffmpeg_preset: str = 'medium',
+  ) -> Path | None:
+    """Overlay brand logo as a watermark in the top-right corner."""
+    output = temp_root / 'logo_watermark.mp4'
+    # Scale logo to ~8% of video width, place in top-right with 20px padding
+    logo_w = max(int(video_width * 0.08), 40)
+    filter_graph = (
+      f"[1:v]scale={logo_w}:-1,format=rgba,colorchannelmixer=aa=0.7[logo];"
+      f"[0:v][logo]overlay=W-w-20:20"
+    )
+    cmd = [
+      ffmpeg_path, '-y',
+      '-i', str(input_video),
+      '-i', str(logo_path),
+      '-filter_complex', filter_graph,
+      '-c:v', 'libx264', '-preset', ffmpeg_preset, '-c:a', 'copy',
+      str(output),
+    ]
+    result = subprocess.run(cmd, check=False, capture_output=True)
+    if result.returncode != 0:
+      logger.warning('Logo watermark failed, continuing without: %s',
+                      result.stderr.decode('utf-8', errors='replace')[-200:])
+      return None
+    return output if output.exists() else None
+
+  @staticmethod
+  def _stitch_intro_outro(
+    ffmpeg_path: str, temp_root: Path, main_video: Path,
+    effects_config: VideoEffectsConfig,
+  ) -> Path:
+    """Prepend intro clip and/or append outro clip to the main video."""
+    parts: list[Path] = []
+
+    if effects_config.intro_clip_path and Path(effects_config.intro_clip_path).exists():
+      parts.append(Path(effects_config.intro_clip_path))
+
+    parts.append(main_video)
+
+    if effects_config.outro_clip_path and Path(effects_config.outro_clip_path).exists():
+      parts.append(Path(effects_config.outro_clip_path))
+
+    # Nothing to stitch if it's just the main video
+    if len(parts) == 1:
+      return main_video
+
+    concat_file = temp_root / 'stitch_concat.txt'
+    concat_file.write_text(''.join(f"file '{p}'\n" for p in parts))
+    stitched = temp_root / 'stitched.mp4'
+
+    cmd = [
+      ffmpeg_path, '-y',
+      '-f', 'concat', '-safe', '0', '-i', str(concat_file),
+      '-c', 'copy',
+      str(stitched),
+    ]
+    result = subprocess.run(cmd, check=False, capture_output=True)
+    if result.returncode != 0:
+      logger.warning('Intro/outro stitch failed, using main video only: %s',
+                      result.stderr.decode('utf-8', errors='replace')[-200:])
+      return main_video
+    return stitched if stitched.exists() else main_video

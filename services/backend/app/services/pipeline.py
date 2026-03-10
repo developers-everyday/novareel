@@ -217,6 +217,33 @@ def process_generation_job(
         )
         storage.store_text(f'{prefix}/storyboard_with_broll.json', json.dumps([s.model_dump() for s in storyboard]))
 
+    # ── Phase 3 Feature D: AWAITING_APPROVAL gate ─────────────────
+    if not job.auto_approve:
+      from app.services.storyboard_editor import StoryboardEditorService
+      editor = StoryboardEditorService(storage)
+      existing_sb = editor.load_storyboard(project.id, job.id)
+      if not existing_sb:
+        # First time reaching this point — save storyboard and pause
+        matched_images = [{'image_key': seg.image_key} for seg in storyboard]
+        sb = editor.build_storyboard_from_pipeline(job, script_lines, matched_images, storage)
+        editor.save_storyboard(sb)
+        repo.update_job(
+          job.id,
+          status=JobStatus.AWAITING_APPROVAL,
+          stage=JobStatus.AWAITING_APPROVAL,
+          progress_pct=50,
+          timings=timings,
+        )
+        logger.info('Job %s paused at AWAITING_APPROVAL (auto_approve=False)', job.id)
+        return
+      else:
+        # Resuming after approval — apply edited storyboard
+        edited_lines, edited_keys = editor.apply_storyboard_to_pipeline(existing_sb)
+        script_lines = edited_lines
+        # Invalidate cached narration so it uses the edited script
+        storage.store_text(f'{prefix}/script_lines.json', json.dumps(script_lines))
+        logger.info('Resuming job %s from AWAITING_APPROVAL with edited storyboard', job.id)
+
     # ── NARRATION ──────────────────────────────────────────────────
     transcript = '\n'.join(script_lines)
     transcript_key = f'projects/{project.id}/outputs/{job.id}.txt'
@@ -249,6 +276,18 @@ def process_generation_job(
         audio_payload = provider.synthesize(transcript[:3000], voice_gender=job.voice_gender, language=job.language)
 
       storage.store_bytes(audio_key, audio_payload, content_type='audio/mpeg')
+
+      # Phase 3 — Audio post-processing (silence trim + normalize)
+      if not settings.use_mock_ai and audio_path.exists() and audio_path.stat().st_size > 100:
+        from app.services.audio import AudioProcessor
+        audio_proc = AudioProcessor()
+        audio_proc.process(
+          audio_path, audio_path,
+          trim_silence=True,
+          normalize=True,
+          speed=1.0,
+        )
+
       timings['narration_sec'] = round(time.perf_counter() - phase_start, 3)
 
     transcript_url = storage.get_public_url(transcript_key)
@@ -297,9 +336,17 @@ def process_generation_job(
     from app.services.music import select_music_path
     music_path = select_music_path(job.background_music, job.voice_style)
 
-    # Build effects config for transitions and overlays
+    # Phase 3 — Resolve brand kit and build effects config
+    from app.services.brand import BrandService
+    brand_service = BrandService(settings, storage)
+    brand_kit = brand_service.resolve_brand_kit(project.owner_id, repo)
+
+    # If brand kit has custom music and job uses 'auto', prefer brand music
+    if brand_kit and brand_kit.custom_music_paths and job.background_music == 'auto':
+      music_path = brand_kit.custom_music_paths[0]
+
     job._project_title = project.title  # Inject for title card overlay
-    effects_config = VideoEffectsConfig.from_job(job)
+    effects_config = brand_service.build_effects_config(brand_kit, job)
 
     video_key, duration_sec, resolution, thumbnail_key = video_service.render_video(
       project=project,
@@ -320,18 +367,24 @@ def process_generation_job(
 
     timings['rendering_sec'] = round(time.perf_counter() - phase_start, 3)
 
+    # Phase 3 Feature F — CDN URL support
+    def _public_url(key: str) -> str:
+      if settings.cdn_base_url:
+        return f'{settings.cdn_base_url.rstrip("/")}/{key}'
+      return storage.get_public_url(key)
+
     result = VideoResultRecord(
       project_id=project.id,
       job_id=job.id,
       video_s3_key=video_key,
-      video_url=storage.get_public_url(video_key),
+      video_url=_public_url(video_key),
       duration_sec=duration_sec,
       resolution=resolution,
       thumbnail_key=thumbnail_key,
       transcript_key=transcript_key,
-      transcript_url=transcript_url,
+      transcript_url=_public_url(transcript_key),
       subtitle_key=subtitle_key,
-      subtitle_url=storage.get_public_url(subtitle_key),
+      subtitle_url=_public_url(subtitle_key),
       storyboard=storyboard,
       script_lines=script_lines,
       language=job.language,
