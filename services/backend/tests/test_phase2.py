@@ -269,3 +269,164 @@ def test_nova_load_template_prompt(tmp_path):
 
   missing = service._load_template_prompt('nonexistent_template_xyz')
   assert missing is None
+
+
+# ─── Sprint 4: Captions ────────────────────────────────────────────────────
+
+def test_mock_transcription_backend():
+  """MockTranscriptionBackend generates evenly-spaced word timings."""
+  from app.services.transcription import MockTranscriptionBackend
+
+  backend = MockTranscriptionBackend(script_lines=['Hello world', 'Testing one two three'])
+  timings = backend.transcribe(Path('/fake/audio.mp3'), language='en')
+
+  assert len(timings) == 6  # Hello world Testing one two three -> 6 words
+  assert timings[0].word == 'Hello'
+  assert timings[-1].word == 'three'
+  assert timings[0].start_sec < timings[0].end_sec
+  assert timings[-1].end_sec > timings[-2].end_sec
+
+
+def test_ass_subtitle_generation_word_highlight():
+  """generate_ass_subtitles produces valid ASS with word_highlight style."""
+  from app.services.transcription import WordTiming, generate_ass_subtitles
+
+  timings = [
+    WordTiming(word='Hello', start_sec=0.0, end_sec=0.5),
+    WordTiming(word='world', start_sec=0.6, end_sec=1.0),
+    WordTiming(word='this', start_sec=1.5, end_sec=2.0),
+    WordTiming(word='is', start_sec=2.1, end_sec=2.4),
+    WordTiming(word='a', start_sec=2.5, end_sec=2.7),
+    WordTiming(word='test', start_sec=2.8, end_sec=3.2),
+  ]
+
+  ass = generate_ass_subtitles(timings, caption_style='word_highlight', resolution='1920x1080')
+
+  assert '[Script Info]' in ass
+  assert 'PlayResX: 1920' in ass
+  assert 'PlayResY: 1080' in ass
+  assert '[V4+ Styles]' in ass
+  assert 'Style: Highlight' in ass
+  assert 'Dialogue:' in ass
+  assert 'Hello' in ass
+  assert 'world' in ass
+
+
+def test_ass_subtitle_generation_karaoke():
+  """generate_ass_subtitles produces valid ASS with karaoke style."""
+  from app.services.transcription import WordTiming, generate_ass_subtitles
+
+  timings = [
+    WordTiming(word='One', start_sec=0.0, end_sec=0.5),
+    WordTiming(word='two', start_sec=0.6, end_sec=1.0),
+    WordTiming(word='three', start_sec=1.1, end_sec=1.6),
+  ]
+
+  ass = generate_ass_subtitles(timings, caption_style='karaoke')
+  assert '\\kf' in ass  # karaoke tag present
+  assert 'One' in ass
+
+
+def test_ass_subtitle_generation_simple():
+  """generate_ass_subtitles produces valid ASS with simple style."""
+  from app.services.transcription import WordTiming, generate_ass_subtitles
+
+  timings = [
+    WordTiming(word='Simple', start_sec=0.0, end_sec=1.0),
+    WordTiming(word='test', start_sec=1.1, end_sec=2.0),
+  ]
+
+  ass = generate_ass_subtitles(timings, caption_style='simple')
+  assert 'Simple test' in ass
+  assert '\\kf' not in ass  # no karaoke tags
+
+
+# ─── Sprint 4: Effects ────────────────────────────────────────────────────
+
+def test_transition_config_from_style():
+  """TransitionConfig.from_style returns correct xfade name and duration."""
+  from app.services.effects import TransitionConfig
+
+  cfg = TransitionConfig.from_style('crossfade')
+  assert cfg.xfade_name == 'fade'
+  assert cfg.duration == 0.5
+
+  cfg_slide = TransitionConfig.from_style('slide_left')
+  assert cfg_slide.xfade_name == 'slideleft'
+  assert cfg_slide.duration == 0.4
+
+  cfg_none = TransitionConfig.from_style('none')
+  assert cfg_none.xfade_name is None
+  assert cfg_none.duration == 0.0
+
+  cfg_unknown = TransitionConfig.from_style('nonexistent_style')
+  assert cfg_unknown.xfade_name is None
+
+
+def test_video_effects_config_from_job():
+  """VideoEffectsConfig.from_job builds config with transition, title, CTA."""
+  from app.services.effects import VideoEffectsConfig
+  from unittest.mock import MagicMock
+
+  job = MagicMock()
+  job.transition_style = 'crossfade'
+  job.show_title_card = True
+  job._project_title = 'Test Product'
+  job.cta_text = 'Buy now!'
+  job.caption_style = 'word_highlight'
+
+  config = VideoEffectsConfig.from_job(job)
+  assert config.transition.xfade_name == 'fade'
+  assert config.transition.duration == 0.5
+  assert config.title_overlay is not None
+  assert config.title_overlay.text == 'Test Product'
+  assert config.cta_overlay is not None
+  assert config.cta_overlay.text == 'Buy now!'
+  assert config.caption_style == 'word_highlight'
+
+
+def test_text_overlay_escaped_text():
+  """TextOverlay.escaped_text properly escapes special characters."""
+  from app.services.effects import TextOverlay
+
+  overlay = TextOverlay(text="It's a test: value")
+  # Apostrophes become right single quote, colons are escaped
+  assert "'" not in overlay.escaped_text
+  assert "\\:" in overlay.escaped_text
+
+
+def test_xfade_filter_graph_construction():
+  """VideoService._join_with_xfade builds correct ffmpeg filter graph (unit test)."""
+  from app.services.video import VideoService
+
+  # Test with None return when only 1 segment
+  result = VideoService._join_with_xfade(
+    '/usr/bin/ffmpeg', Path('/tmp'),
+    [Path('/tmp/seg_000.mp4')], [5.0],
+    'fade', 0.5,
+  )
+  # Single segment — returns the segment itself
+  assert result == Path('/tmp/seg_000.mp4')
+
+
+def test_build_transcription_backend():
+  """build_transcription_backend returns correct backend type."""
+  from app.services.transcription import (
+    MockTranscriptionBackend,
+    build_transcription_backend,
+  )
+  from unittest.mock import MagicMock
+
+  settings = MagicMock()
+  settings.use_mock_ai = True
+
+  backend = build_transcription_backend('aws_transcribe', settings, script_lines=['Test'])
+  assert isinstance(backend, MockTranscriptionBackend)
+
+  settings.use_mock_ai = False
+  settings.whisper_model = 'base'
+
+  from app.services.transcription import WhisperTranscriptionBackend
+  backend_whisper = build_transcription_backend('whisper', settings)
+  assert isinstance(backend_whisper, WhisperTranscriptionBackend)
+

@@ -4,9 +4,11 @@ import json
 import logging
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 
 from app.models import GenerationJobRecord, JobStatus, StoryboardSegment, VideoResultRecord
 from app.repositories.base import Repository
+from app.services.effects import VideoEffectsConfig
 from app.services.nova import NovaService
 from app.services.storage import StorageService
 from app.services.video import VideoService
@@ -98,6 +100,12 @@ def process_generation_job(
     transcript_key = f'projects/{project.id}/outputs/{job.id}.txt'
     audio_key = f'projects/{project.id}/outputs/{job.id}.mp3'
 
+    # Compute the local file path for the audio (used by transcription step too)
+    from app.config import get_settings
+    settings = get_settings()
+    storage_root = settings.local_data_dir / settings.local_storage_dir
+    audio_path = storage_root / audio_key
+
     if storage.exists(audio_key):
       logger.info('Resuming: skipped NARRATION (cached)')
     else:
@@ -122,6 +130,33 @@ def process_generation_job(
 
     transcript_url = storage.get_public_url(transcript_key)
 
+    # Compute resolution for ASS subtitle generation and render
+    ass_resolution, _ = video_service._resolution_for(job.aspect_ratio)
+
+    # ── TRANSCRIPTION (word-level captions) ────────────────────────
+    ass_subtitle_file = None
+    caption_style = job.caption_style or 'none'
+    if caption_style != 'none':
+      from app.services.transcription import build_transcription_backend, generate_ass_subtitles
+
+      settings = get_settings()
+      backend = build_transcription_backend(
+        settings.transcription_backend, settings, script_lines=script_lines,
+      )
+      word_timings = backend.transcribe(audio_path, language=job.language)
+
+      if word_timings:
+        ass_content = generate_ass_subtitles(
+          word_timings, caption_style=caption_style, resolution=ass_resolution,
+        )
+        ass_key = f'projects/{project.id}/outputs/{job.id}.ass'
+        storage.store_text(ass_key, ass_content)
+
+        # Write ASS to a temp file for ffmpeg
+        import tempfile
+        ass_subtitle_file = Path(tempfile.mktemp(suffix='.ass', prefix='novareel-'))
+        ass_subtitle_file.write_text(ass_content)
+
     # ── RENDERING (always re-run) ─────────────────────────────────
     repo.update_job(job.id, status=JobStatus.RENDERING, stage=JobStatus.RENDERING, progress_pct=90, timings=timings)
     phase_start = time.perf_counter()
@@ -130,6 +165,10 @@ def process_generation_job(
     from app.services.music import select_music_path
     music_path = select_music_path(job.background_music, job.voice_style)
 
+    # Build effects config for transitions and overlays
+    job._project_title = project.title  # Inject for title card overlay
+    effects_config = VideoEffectsConfig.from_job(job)
+
     video_key, duration_sec, resolution, thumbnail_key = video_service.render_video(
       project=project,
       job_id=job.id,
@@ -137,7 +176,13 @@ def process_generation_job(
       storyboard=storyboard,
       storage=storage,
       music_path=music_path,
+      effects_config=effects_config,
+      ass_subtitle_path=ass_subtitle_file,
     )
+
+    # Cleanup temp ASS file
+    if ass_subtitle_file and ass_subtitle_file.exists():
+      ass_subtitle_file.unlink(missing_ok=True)
     subtitle_key = f'projects/{project.id}/outputs/{job.id}.srt'
     storage.store_text(subtitle_key, _build_srt(storyboard))
 

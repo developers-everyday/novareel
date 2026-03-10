@@ -37,6 +37,10 @@ export function ProjectStudio() {
   const [language, setLanguage] = useState('en');
   const [backgroundMusic, setBackgroundMusic] = useState('auto');
   const [scriptTemplate, setScriptTemplate] = useState('product_showcase');
+  const [captionStyle, setCaptionStyle] = useState('none');
+  const [transitionStyle, setTransitionStyle] = useState('none');
+  const [showTitleCard, setShowTitleCard] = useState(false);
+  const [ctaText, setCtaText] = useState('');
   const [brandColors, setBrandColors] = useState('#f97316,#0f172a');
   const [files, setFiles] = useState<File[]>([]);
 
@@ -194,6 +198,10 @@ export function ProjectStudio() {
           background_music: backgroundMusic,
           idempotency_key: idempotencyKey,
           script_template: scriptTemplate,
+          caption_style: captionStyle,
+          transition_style: transitionStyle,
+          show_title_card: showTitleCard,
+          cta_text: ctaText || undefined,
         },
         token
       );
@@ -458,6 +466,68 @@ export function ProjectStudio() {
               <option value="seasonal">Seasonal Promotion</option>
               <option value="luxury">Luxury / Premium</option>
             </select>
+          </label>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="block text-sm font-medium text-slate-700">
+            Caption style
+            <select
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              value={captionStyle}
+              onChange={(event) => setCaptionStyle(event.target.value)}
+            >
+              <option value="none">No captions</option>
+              <option value="simple">Simple subtitles</option>
+              <option value="word_highlight">Word highlight</option>
+              <option value="karaoke">Karaoke</option>
+            </select>
+          </label>
+
+          <label className="block text-sm font-medium text-slate-700">
+            Transition effect
+            <select
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              value={transitionStyle}
+              onChange={(event) => setTransitionStyle(event.target.value)}
+            >
+              <option value="none">None (cut)</option>
+              <option value="crossfade">Crossfade</option>
+              <option value="slide_left">Slide left</option>
+              <option value="slide_right">Slide right</option>
+              <option value="slide_up">Slide up</option>
+              <option value="slide_down">Slide down</option>
+              <option value="wipe_left">Wipe left</option>
+              <option value="wipe_right">Wipe right</option>
+              <option value="fade_black">Fade to black</option>
+              <option value="fade_white">Fade to white</option>
+              <option value="circle_open">Circle open</option>
+              <option value="circle_close">Circle close</option>
+              <option value="dissolve">Dissolve</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              className="rounded border-slate-300"
+              checked={showTitleCard}
+              onChange={(event) => setShowTitleCard(event.target.checked)}
+            />
+            Show title card
+          </label>
+
+          <label className="block text-sm font-medium text-slate-700">
+            CTA text (optional)
+            <input
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              value={ctaText}
+              onChange={(event) => setCtaText(event.target.value)}
+              placeholder="Shop now at example.com"
+              maxLength={100}
+            />
           </label>
         </div>
 
