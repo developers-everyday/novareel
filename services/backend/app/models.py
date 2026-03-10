@@ -73,9 +73,13 @@ class GenerateRequest(BaseModel):
   # Phase 2
   script_template: str = 'product_showcase'
   video_style: Literal['product_only', 'product_lifestyle', 'lifestyle_focus'] = 'product_only'
-  transition_style: Literal['cut', 'crossfade', 'slide_left', 'wipe_right', 'zoom', 'dissolve'] = 'crossfade'
-  caption_style: Literal['sentence', 'word_highlight', 'karaoke', 'none'] = 'sentence'
-  show_title_card: bool = True
+  transition_style: Literal[
+    'none', 'crossfade', 'slide_left', 'slide_right',
+    'slide_up', 'slide_down', 'wipe_left', 'wipe_right',
+    'fade_black', 'fade_white', 'circle_open', 'circle_close', 'dissolve',
+  ] = 'none'
+  caption_style: Literal['none', 'simple', 'word_highlight', 'karaoke'] = 'none'
+  show_title_card: bool = False
   cta_text: str | None = None
 
 
@@ -99,9 +103,9 @@ class JobCreateParams(BaseModel):
   # Phase 2
   script_template: str = 'product_showcase'
   video_style: str = 'product_only'
-  transition_style: str = 'crossfade'
-  caption_style: str = 'sentence'
-  show_title_card: bool = True
+  transition_style: str = 'none'
+  caption_style: str = 'none'
+  show_title_card: bool = False
   cta_text: str | None = None
   job_type: str = 'generation'
   source_job_id: str | None = None
@@ -124,7 +128,6 @@ class GenerationJobRecord(BaseModel):
   voice_gender: str = 'female'
   language: str = 'en'
   background_music: str = 'auto'
-  last_completed_stage: str | None = None
   idempotency_key: str | None = None
   attempt_count: int = 0
   max_attempts: int = 3
@@ -136,9 +139,9 @@ class GenerationJobRecord(BaseModel):
   source_job_id: str | None = None
   script_template: str = 'product_showcase'
   video_style: str = 'product_only'
-  transition_style: str = 'crossfade'
-  caption_style: str = 'sentence'
-  show_title_card: bool = True
+  transition_style: str = 'none'
+  caption_style: str = 'none'
+  show_title_card: bool = False
   cta_text: str | None = None
 
 

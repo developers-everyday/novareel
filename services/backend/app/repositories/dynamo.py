@@ -177,10 +177,11 @@ class DynamoRepository(Repository):
       return None
     if job.next_attempt_at and job.next_attempt_at > now:
       return None
+    initial_status = JobStatus.LOADING if job.job_type == 'translation' else JobStatus.SCRIPTING
     return self.update_job(
       job_id,
-      status=JobStatus.SCRIPTING,
-      stage=JobStatus.SCRIPTING,
+      status=initial_status,
+      stage=initial_status,
       progress_pct=5,
       attempt_count=job.attempt_count + 1,
     )

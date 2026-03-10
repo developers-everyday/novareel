@@ -3,12 +3,13 @@ from __future__ import annotations
 import logging
 
 from app.config import Settings
-from app.services.voice.base import VoiceProvider
+from app.config.languages import get_voice_name, SUPPORTED_LANGUAGES
+from app.services.voice.base import MOCK_SILENT_MP3, VoiceProvider
 
 log = logging.getLogger(__name__)
 
-# Default ElevenLabs voice IDs
-_VOICE_MAP = {
+# Default ElevenLabs voice IDs (fallback for unsupported languages)
+_DEFAULT_VOICE_MAP = {
   'female': 'EXAVITQu4vr4xnSDxMaL',  # Rachel
   'male': 'pNInz6obpgDQGcFmaJgB',     # Adam
 }
@@ -30,10 +31,19 @@ class ElevenLabsVoiceProvider(VoiceProvider):
     try:
       import httpx
     except ImportError:
-      log.warning('httpx not installed, returning mock audio')
-      return f'MOCK-VOICE::elevenlabs::{voice_gender}::{text}'.encode('utf-8')
+      log.warning('httpx not installed, returning silent mock MP3')
+      return MOCK_SILENT_MP3
 
-    voice_id = _VOICE_MAP.get(voice_gender, _VOICE_MAP['female'])
+    # Use language-aware voice if available
+    lang_config = SUPPORTED_LANGUAGES.get(language, {})
+    voice_id = None
+    if lang_config.get('elevenlabs_supported'):
+      voice_name = get_voice_name(language, 'elevenlabs', voice_gender)
+      if voice_name:
+        voice_id = voice_name
+    if not voice_id:
+      voice_id = _DEFAULT_VOICE_MAP.get(voice_gender, _DEFAULT_VOICE_MAP['female'])
+    log.info('ElevenLabs selected voice_id=%s for language=%s gender=%s', voice_id, language, voice_gender)
 
     try:
       response = httpx.post(
@@ -56,4 +66,4 @@ class ElevenLabsVoiceProvider(VoiceProvider):
       return response.content
     except Exception as exc:
       log.warning('ElevenLabs synthesis failed: %s', exc)
-      return f'MOCK-VOICE::elevenlabs::{voice_gender}::{text}'.encode('utf-8')
+      return MOCK_SILENT_MP3

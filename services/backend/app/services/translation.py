@@ -49,9 +49,12 @@ class TranslationService:
         target_language: str,
         product_context: str,
     ) -> str:
+        from app.config.languages import get_language_name
+        source_name = get_language_name(source_language)
+        target_name = get_language_name(target_language)
         numbered_lines = '\n'.join(f'{i+1}. {line}' for i, line in enumerate(script_lines))
         return f"""You are a professional marketing translator. Translate the following video narration script
-from {source_language} to {target_language}.
+from {source_name} to {target_name}.
 
 RULES:
 - Keep product names, brand names, and model numbers UNTRANSLATED
@@ -69,26 +72,19 @@ SCRIPT TO TRANSLATE:
 OUTPUT: Return ONLY the translated lines, one per line, no numbering, no extra text."""
 
     def _call_llm(self, prompt: str, expected_line_count: int) -> list[str]:
-        """Call Bedrock Nova to translate the script."""
-        body = json.dumps({
-            'messages': [
+        """Call Bedrock Nova to translate the script using the converse() API."""
+        response = self._client.converse(
+            modelId=self._model_id,
+            messages=[
                 {'role': 'user', 'content': [{'text': prompt}]},
             ],
-            'inferenceConfig': {
+            inferenceConfig={
                 'maxTokens': 2000,
                 'temperature': 0.3,
             },
-        })
-
-        response = self._client.invoke_model(
-            modelId=self._model_id,
-            body=body,
-            contentType='application/json',
-            accept='application/json',
         )
 
-        response_body = json.loads(response['body'].read())
-        raw_text = response_body['output']['message']['content'][0]['text'].strip()
+        raw_text = response['output']['message']['content'][0]['text'].strip()
 
         # Parse lines and ensure count matches
         lines = [line.strip() for line in raw_text.split('\n') if line.strip()]

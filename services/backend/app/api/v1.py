@@ -184,6 +184,13 @@ def enqueue_generation(
         detail=f"Stock footage style '{payload.video_style}' requires Pexels API key. Configure NOVAREEL_PEXELS_API_KEY or use 'product_only' style.",
       )
 
+  from app.config.languages import SUPPORTED_LANGUAGES
+  if payload.language not in SUPPORTED_LANGUAGES:
+    raise HTTPException(
+      status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+      detail=f'Unsupported language: {payload.language}. Supported: {", ".join(sorted(SUPPORTED_LANGUAGES.keys()))}',
+    )
+
   if payload.idempotency_key:
     existing_job = repo.find_job_by_idempotency(
       owner_id=current_user.user_id,
@@ -333,6 +340,14 @@ def translate_video(
 
   if not payload.target_languages:
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='At least one target language is required')
+
+  from app.config.languages import SUPPORTED_LANGUAGES
+  for lang in payload.target_languages:
+    if lang not in SUPPORTED_LANGUAGES:
+      raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=f'Unsupported language: {lang}. Supported: {", ".join(sorted(SUPPORTED_LANGUAGES.keys()))}',
+      )
 
   translation_jobs: list[GenerationJobRecord] = []
   for lang in payload.target_languages:
@@ -493,9 +508,14 @@ def process_single_job(
   if not claimed and job.status != JobStatus.QUEUED:
     return job
 
-  from app.services.pipeline import process_generation_job
-
-  process_generation_job(repo=repo, storage=storage, nova=nova, video_service=video_service, job=claimed or job)
+  target_job = claimed or job
+  if target_job.job_type == 'translation':
+    from app.services.pipeline_translate import process_translation_job
+    translation_service = get_translation_service()
+    process_translation_job(repo=repo, storage=storage, translation_service=translation_service, video_service=video_service, job=target_job)
+  else:
+    from app.services.pipeline import process_generation_job
+    process_generation_job(repo=repo, storage=storage, nova=nova, video_service=video_service, job=target_job)
   final_job = repo.get_job(job_id)
   if not final_job:
     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Job state missing')

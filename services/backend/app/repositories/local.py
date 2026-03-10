@@ -225,8 +225,9 @@ class LocalRepository(Repository):
     if current.next_attempt_at and current.next_attempt_at > now:
       return None
 
-    raw['status'] = JobStatus.SCRIPTING.value
-    raw['stage'] = JobStatus.SCRIPTING.value
+    initial_status = JobStatus.LOADING if current.job_type == 'translation' else JobStatus.SCRIPTING
+    raw['status'] = initial_status.value
+    raw['stage'] = initial_status.value
     raw['progress_pct'] = 5
     raw['attempt_count'] = int(raw.get('attempt_count', 0)) + 1
     raw['next_attempt_at'] = None

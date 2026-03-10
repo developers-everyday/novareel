@@ -5,7 +5,7 @@ import io
 import logging
 
 from app.config import Settings
-from app.services.voice.base import VoiceProvider
+from app.services.voice.base import MOCK_SILENT_MP3, VoiceProvider
 
 log = logging.getLogger(__name__)
 
@@ -20,8 +20,8 @@ class EdgeTTSVoiceProvider(VoiceProvider):
     try:
       import edge_tts
     except ImportError:
-      log.warning('edge-tts package not installed, returning mock audio')
-      return f'MOCK-VOICE::edge_tts::{voice_gender}::{text}'.encode('utf-8')
+      log.warning('edge-tts package not installed, returning silent mock MP3')
+      return MOCK_SILENT_MP3
 
     from app.config.languages import get_voice_name
 
@@ -29,12 +29,13 @@ class EdgeTTSVoiceProvider(VoiceProvider):
     if not voice_name:
       # Fallback to English
       voice_name = 'en-AU-NatashaNeural' if voice_gender == 'female' else 'en-AU-WilliamNeural'
+    log.info('EdgeTTS selected voice=%s for language=%s gender=%s', voice_name, language, voice_gender)
 
     try:
       return asyncio.run(self._async_synthesize(edge_tts, text[:3000], voice_name))
     except Exception as exc:
       log.warning('EdgeTTS synthesis failed: %s', exc)
-      return f'MOCK-VOICE::edge_tts::{voice_gender}::{text}'.encode('utf-8')
+      return MOCK_SILENT_MP3
 
   @staticmethod
   async def _async_synthesize(edge_tts, text: str, voice: str) -> bytes:

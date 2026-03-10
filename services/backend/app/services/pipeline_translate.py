@@ -5,34 +5,16 @@ from __future__ import annotations
 import logging
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 
 from app.models import GenerationJobRecord, JobStatus, StoryboardSegment, VideoResultRecord
 from app.repositories.base import Repository
 from app.services.storage import StorageService
+from app.services.subtitle_utils import build_srt
 from app.services.translation import TranslationService
 from app.services.video import VideoService
 
 logger = logging.getLogger(__name__)
-
-
-def _to_srt_timestamp(value: float) -> str:
-    millis = int(round(value * 1000))
-    hours = millis // 3_600_000
-    millis %= 3_600_000
-    minutes = millis // 60_000
-    millis %= 60_000
-    seconds = millis // 1_000
-    millis %= 1_000
-    return f'{hours:02}:{minutes:02}:{seconds:02},{millis:03}'
-
-
-def _build_srt(storyboard: list[StoryboardSegment]) -> str:
-    rows: list[str] = []
-    for segment in storyboard:
-        start = _to_srt_timestamp(segment.start_sec)
-        end = _to_srt_timestamp(segment.start_sec + segment.duration_sec)
-        rows.append(f'{segment.order}\n{start} --> {end}\n{segment.script_line}\n')
-    return '\n'.join(rows)
 
 
 def process_translation_job(
@@ -92,6 +74,9 @@ def process_translation_job(
         )
 
         # Update storyboard segments with translated script lines
+        if len(translated_lines) != len(storyboard):
+            logger.warning('Translation returned %d lines but storyboard has %d segments', len(translated_lines), len(storyboard))
+
         translated_storyboard = []
         for i, segment in enumerate(storyboard):
             translated_segment = StoryboardSegment(
@@ -122,7 +107,8 @@ def process_translation_job(
 
         settings = get_settings()
         if settings.use_mock_ai:
-            audio_payload = f'MOCK-VOICE::{job.voice_provider}::{job.voice_gender}::{transcript}'.encode()
+            from app.services.voice.base import MOCK_SILENT_MP3
+            audio_payload = MOCK_SILENT_MP3
         else:
             provider = build_voice_provider(job.voice_provider, settings)
             audio_payload = provider.synthesize(
@@ -143,6 +129,36 @@ def process_translation_job(
         from app.services.music import select_music_path
         music_path = select_music_path(job.background_music, job.voice_style)
 
+        # Build effects config for transitions and overlays
+        from app.services.effects import VideoEffectsConfig
+        job._project_title = project.title
+        effects_config = VideoEffectsConfig.from_job(job)
+
+        # Generate captions if needed
+        ass_subtitle_file = None
+        caption_style = job.caption_style or 'none'
+        if caption_style != 'none':
+            from app.services.transcription import build_transcription_backend, generate_ass_subtitles
+
+            settings = get_settings()
+            audio_path = (settings.local_data_dir / settings.local_storage_dir
+                          / 'projects' / project.id / 'outputs' / f'{job.id}.mp3')
+            ass_resolution, _ = video_service._resolution_for(job.aspect_ratio)
+            backend = build_transcription_backend(
+                settings.transcription_backend, settings, script_lines=translated_lines,
+            )
+            word_timings = backend.transcribe(audio_path, language=job.language)
+            if word_timings:
+                ass_content = generate_ass_subtitles(
+                    word_timings, caption_style=caption_style, resolution=ass_resolution,
+                )
+                ass_key = f'projects/{project.id}/outputs/{job.id}.ass'
+                storage.store_text(ass_key, ass_content)
+
+                import tempfile
+                ass_subtitle_file = Path(tempfile.mktemp(suffix='.ass', prefix='novareel-'))
+                ass_subtitle_file.write_text(ass_content)
+
         video_key, duration_sec, resolution, thumbnail_key = video_service.render_video(
             project=project,
             job_id=job.id,
@@ -150,10 +166,16 @@ def process_translation_job(
             storyboard=translated_storyboard,
             storage=storage,
             music_path=music_path,
+            effects_config=effects_config,
+            ass_subtitle_path=ass_subtitle_file,
         )
 
+        # Cleanup temp ASS file
+        if ass_subtitle_file and ass_subtitle_file.exists():
+            ass_subtitle_file.unlink(missing_ok=True)
+
         subtitle_key = f'projects/{project.id}/outputs/{job.id}.srt'
-        storage.store_text(subtitle_key, _build_srt(translated_storyboard))
+        storage.store_text(subtitle_key, build_srt(translated_storyboard))
 
         timings['rendering_sec'] = round(time.perf_counter() - phase_start, 3)
 

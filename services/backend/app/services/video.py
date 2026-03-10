@@ -269,7 +269,7 @@ class VideoService:
           logger.warning('Audio mux failed, using video-only output')
 
       # ── Mix background music ──────────────────────────────────────────
-      if music_path and music_path.exists() and final_video != joined_video:
+      if music_path and music_path.exists():
         music_muxed = temp_root / 'music_muxed.mp4'
         music_cmd = [
           ffmpeg_path, '-y',

@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 
+# NOTE: The following languages have NO Polly male voice available:
+#   ar (Arabic), hi (Hindi), zh (Chinese), ko (Korean), sv (Swedish), tr (Turkish)
+# The following languages have NO Polly voices at all (use edge_tts instead):
+#   th (Thai), vi (Vietnamese), id (Indonesian), ms (Malay)
+# When Polly is selected for these languages with male gender, the system will
+# fall back to the female voice (if available) or the default English voice.
 SUPPORTED_LANGUAGES: dict[str, dict] = {
     'en': {
         'name': 'English',

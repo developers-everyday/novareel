@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from app.config import Settings
-from app.services.voice.base import VoiceProvider
+from app.services.voice.base import MOCK_SILENT_MP3, VoiceProvider
 
 log = logging.getLogger(__name__)
 
@@ -18,7 +18,8 @@ class PollyVoiceProvider(VoiceProvider):
     try:
       import boto3
     except ImportError:
-      return f'MOCK-VOICE::polly::{voice_gender}::{text}'.encode('utf-8')
+      log.warning('boto3 not installed, returning silent mock MP3')
+      return MOCK_SILENT_MP3
 
     from app.config.languages import get_voice_name
 
@@ -26,6 +27,7 @@ class PollyVoiceProvider(VoiceProvider):
     if not voice_id:
       # Fallback to defaults
       voice_id = 'Joanna' if voice_gender == 'female' else 'Matthew'
+    log.info('Polly selected voice_id=%s for language=%s gender=%s', voice_id, language, voice_gender)
 
     try:
       polly = boto3.client('polly', region_name=self._settings.aws_region)
@@ -40,4 +42,4 @@ class PollyVoiceProvider(VoiceProvider):
     except Exception as exc:
       log.warning('Polly synthesis failed: %s', exc)
 
-    return f'MOCK-VOICE::polly::{voice_gender}::{text}'.encode('utf-8')
+    return MOCK_SILENT_MP3

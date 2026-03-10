@@ -21,6 +21,29 @@ import { JobStatusCard } from '@/components/job-status-card';
 
 const pollableStatuses = new Set<GenerationJob['status']>(['queued', 'analyzing', 'scripting', 'matching', 'narration', 'rendering', 'loading', 'translating']);
 
+const SUPPORTED_LANGUAGES = [
+  { code: 'en', label: 'English' },
+  { code: 'es', label: 'Spanish (Español)' },
+  { code: 'fr', label: 'French (Français)' },
+  { code: 'de', label: 'German (Deutsch)' },
+  { code: 'ar', label: 'Arabic (العربية)' },
+  { code: 'hi', label: 'Hindi (हिन्दी)' },
+  { code: 'ja', label: 'Japanese (日本語)' },
+  { code: 'zh', label: 'Chinese (中文)' },
+  { code: 'ko', label: 'Korean (한국어)' },
+  { code: 'pt', label: 'Portuguese (Português)' },
+  { code: 'it', label: 'Italian (Italiano)' },
+  { code: 'ru', label: 'Russian (Русский)' },
+  { code: 'tr', label: 'Turkish (Türkçe)' },
+  { code: 'nl', label: 'Dutch (Nederlands)' },
+  { code: 'pl', label: 'Polish (Polski)' },
+  { code: 'sv', label: 'Swedish (Svenska)' },
+  { code: 'th', label: 'Thai (ไทย)' },
+  { code: 'vi', label: 'Vietnamese (Tiếng Việt)' },
+  { code: 'id', label: 'Indonesian (Bahasa)' },
+  { code: 'ms', label: 'Malay (Melayu)' },
+] as const;
+
 function formatDate(value: string): string {
   return new Date(value).toLocaleString();
 }
@@ -411,26 +434,9 @@ export function ProjectStudio() {
               value={language}
               onChange={(event) => setLanguage(event.target.value)}
             >
-              <option value="en">English</option>
-              <option value="es">Spanish (Español)</option>
-              <option value="fr">French (Français)</option>
-              <option value="de">German (Deutsch)</option>
-              <option value="ar">Arabic (العربية)</option>
-              <option value="hi">Hindi (हिन्दी)</option>
-              <option value="ja">Japanese (日本語)</option>
-              <option value="zh">Chinese (中文)</option>
-              <option value="ko">Korean (한국어)</option>
-              <option value="pt">Portuguese (Português)</option>
-              <option value="it">Italian (Italiano)</option>
-              <option value="ru">Russian (Русский)</option>
-              <option value="tr">Turkish (Türkçe)</option>
-              <option value="nl">Dutch (Nederlands)</option>
-              <option value="pl">Polish (Polski)</option>
-              <option value="sv">Swedish (Svenska)</option>
-              <option value="th">Thai (ไทย)</option>
-              <option value="vi">Vietnamese (Tiếng Việt)</option>
-              <option value="id">Indonesian (Bahasa)</option>
-              <option value="ms">Malay (Melayu)</option>
+              {SUPPORTED_LANGUAGES.map((lang) => (
+                <option key={lang.code} value={lang.code}>{lang.label}</option>
+              ))}
             </select>
           </label>
 
@@ -668,20 +674,7 @@ export function ProjectStudio() {
             <h3 className="text-lg font-semibold text-ink">Translate video</h3>
             <p className="mt-1 text-sm text-slate-600">Select target languages and voice settings for dubbed versions.</p>
             <div className="mt-3 grid grid-cols-3 gap-2">
-              {[
-                { code: 'es', label: 'Spanish' },
-                { code: 'fr', label: 'French' },
-                { code: 'de', label: 'German' },
-                { code: 'pt', label: 'Portuguese' },
-                { code: 'it', label: 'Italian' },
-                { code: 'ja', label: 'Japanese' },
-                { code: 'ko', label: 'Korean' },
-                { code: 'zh', label: 'Chinese' },
-                { code: 'ar', label: 'Arabic' },
-                { code: 'hi', label: 'Hindi' },
-                { code: 'ru', label: 'Russian' },
-                { code: 'tr', label: 'Turkish' },
-              ].map((lang) => (
+              {SUPPORTED_LANGUAGES.filter((lang) => lang.code !== 'en').map((lang) => (
                 <label key={lang.code} className="flex items-center gap-2 text-sm text-slate-700">
                   <input
                     type="checkbox"

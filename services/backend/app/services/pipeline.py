@@ -11,29 +11,10 @@ from app.repositories.base import Repository
 from app.services.effects import VideoEffectsConfig
 from app.services.nova import NovaService
 from app.services.storage import StorageService
+from app.services.subtitle_utils import build_srt
 from app.services.video import VideoService
 
 logger = logging.getLogger(__name__)
-
-
-def _to_srt_timestamp(value: float) -> str:
-  millis = int(round(value * 1000))
-  hours = millis // 3_600_000
-  millis %= 3_600_000
-  minutes = millis // 60_000
-  millis %= 60_000
-  seconds = millis // 1_000
-  millis %= 1_000
-  return f'{hours:02}:{minutes:02}:{seconds:02},{millis:03}'
-
-
-def _build_srt(storyboard) -> str:
-  rows: list[str] = []
-  for segment in storyboard:
-    start = _to_srt_timestamp(segment.start_sec)
-    end = _to_srt_timestamp(segment.start_sec + segment.duration_sec)
-    rows.append(f'{segment.order}\n{start} --> {end}\n{segment.script_line}\n')
-  return '\n'.join(rows)
 
 
 def _fetch_stock_footage(
@@ -121,9 +102,9 @@ def _fetch_stock_footage(
     clip_path = clips_dir / f'broll_{i:03d}.mp4'
 
     if settings.use_mock_ai:
-      # Create a placeholder file for mock mode
-      clip_path.write_bytes(b'MOCK_VIDEO_PLACEHOLDER')
-      downloaded_clips.append((i, clip_path, min(clip_info.get('duration', 5), 5)))
+      # Skip B-roll in mock mode — placeholder bytes aren't valid video
+      logger.info('Mock mode: skipping B-roll download for scene %d', i)
+      continue
     else:
       downloaded = stock_service.download_clip(clip_info['url'], clip_path)
       if downloaded:
@@ -219,16 +200,22 @@ def process_generation_job(
 
     # ── STOCK FOOTAGE (Feature C) ─────────────────────────────────
     if job.video_style and job.video_style != 'product_only':
-      storyboard = _fetch_stock_footage(
-        storyboard=storyboard,
-        script_lines=script_lines,
-        product_description=project.product_description,
-        aspect_ratio=job.aspect_ratio,
-        video_style=job.video_style,
-        storage=storage,
-        project_id=project.id,
-        job_id=job.id,
-      )
+      existing_broll = storage.load_text(f'{prefix}/storyboard_with_broll.json')
+      if existing_broll:
+        storyboard = [StoryboardSegment(**s) for s in json.loads(existing_broll)]
+        logger.info('Resuming: skipped STOCK FOOTAGE (cached)')
+      else:
+        storyboard = _fetch_stock_footage(
+          storyboard=storyboard,
+          script_lines=script_lines,
+          product_description=project.product_description,
+          aspect_ratio=job.aspect_ratio,
+          video_style=job.video_style,
+          storage=storage,
+          project_id=project.id,
+          job_id=job.id,
+        )
+        storage.store_text(f'{prefix}/storyboard_with_broll.json', json.dumps([s.model_dump() for s in storyboard]))
 
     # ── NARRATION ──────────────────────────────────────────────────
     transcript = '\n'.join(script_lines)
@@ -255,7 +242,8 @@ def process_generation_job(
 
       settings = get_settings()
       if settings.use_mock_ai:
-        audio_payload = f'MOCK-VOICE::{job.voice_provider}::{job.voice_gender}::{transcript}'.encode()
+        from app.services.voice.base import MOCK_SILENT_MP3
+        audio_payload = MOCK_SILENT_MP3
       else:
         provider = build_voice_provider(job.voice_provider, settings)
         audio_payload = provider.synthesize(transcript[:3000], voice_gender=job.voice_gender, language=job.language)
@@ -272,13 +260,22 @@ def process_generation_job(
     ass_subtitle_file = None
     caption_style = job.caption_style or 'none'
     if caption_style != 'none':
-      from app.services.transcription import build_transcription_backend, generate_ass_subtitles
+      from app.services.transcription import build_transcription_backend, generate_ass_subtitles, WordTiming
 
       settings = get_settings()
-      backend = build_transcription_backend(
-        settings.transcription_backend, settings, script_lines=script_lines,
-      )
-      word_timings = backend.transcribe(audio_path, language=job.language)
+
+      existing_timings = storage.load_text(f'{prefix}/word_timings.json')
+      if existing_timings:
+        word_timings = [WordTiming(**w) for w in json.loads(existing_timings)]
+        logger.info('Resuming: skipped TRANSCRIPTION (cached)')
+      else:
+        backend = build_transcription_backend(
+          settings.transcription_backend, settings, script_lines=script_lines,
+        )
+        word_timings = backend.transcribe(audio_path, language=job.language)
+        if word_timings:
+          from dataclasses import asdict
+          storage.store_text(f'{prefix}/word_timings.json', json.dumps([asdict(w) for w in word_timings]))
 
       if word_timings:
         ass_content = generate_ass_subtitles(
@@ -319,7 +316,7 @@ def process_generation_job(
     if ass_subtitle_file and ass_subtitle_file.exists():
       ass_subtitle_file.unlink(missing_ok=True)
     subtitle_key = f'projects/{project.id}/outputs/{job.id}.srt'
-    storage.store_text(subtitle_key, _build_srt(storyboard))
+    storage.store_text(subtitle_key, build_srt(storyboard))
 
     timings['rendering_sec'] = round(time.perf_counter() - phase_start, 3)
 
@@ -369,6 +366,11 @@ def process_generation_job(
     )
   except Exception as exc:  # pragma: no cover - exercised in error flows
     logger.exception('Job %s failed', job.id)
+    # Clean up intermediate artifacts from failed attempt
+    try:
+      storage.delete_prefix(f'{prefix}/')
+    except Exception:
+      pass  # Don't mask the original error
     project = repo.get_project(job.project_id)
     if project:
       repo.record_analytics_event(

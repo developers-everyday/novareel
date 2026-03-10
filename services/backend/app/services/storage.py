@@ -163,6 +163,37 @@ class S3StorageService(StorageService):
       ExpiresIn=3600,
     )
 
+  def load_text(self, key: str) -> str | None:
+    try:
+      response = self._client.get_object(Bucket=self._bucket, Key=key)
+      return response['Body'].read().decode('utf-8')
+    except self._client.exceptions.NoSuchKey:
+      return None
+    except Exception:
+      return None
+
+  def exists(self, key: str) -> bool:
+    try:
+      self._client.head_object(Bucket=self._bucket, Key=key)
+      return True
+    except Exception:
+      return False
+
+  def delete_prefix(self, prefix: str) -> None:
+    try:
+      paginator = self._client.get_paginator('list_objects_v2')
+      for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+        objects = page.get('Contents', [])
+        if not objects:
+          continue
+        delete_keys = [{'Key': obj['Key']} for obj in objects]
+        self._client.delete_objects(
+          Bucket=self._bucket,
+          Delete={'Objects': delete_keys},
+        )
+    except Exception:
+      pass
+
 
 def build_storage(settings: Settings) -> StorageService:
   if settings.storage_backend == 'dynamodb':
