@@ -318,3 +318,17 @@ export async function generateVariants(
     token
   );
 }
+
+// ── Phase 4 — Editing Plan ─────────────────────────────────────────────
+
+export async function getEditingPlan(
+  projectId: string,
+  jobId: string,
+  token?: string | null
+): Promise<Record<string, unknown>> {
+  return apiRequest<Record<string, unknown>>(
+    `/v1/projects/${projectId}/jobs/${jobId}/editing-plan`,
+    {},
+    token
+  );
+}

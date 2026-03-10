@@ -348,16 +348,48 @@ def process_generation_job(
     job._project_title = project.title  # Inject for title card overlay
     effects_config = brand_service.build_effects_config(brand_kit, job)
 
-    video_key, duration_sec, resolution, thumbnail_key = video_service.render_video(
-      project=project,
-      job_id=job.id,
-      aspect_ratio=job.aspect_ratio,
-      storyboard=storyboard,
-      storage=storage,
-      music_path=music_path,
-      effects_config=effects_config,
-      ass_subtitle_path=ass_subtitle_file,
-    )
+    output_key = f'projects/{project.id}/outputs/{job.id}.mp4'
+    thumbnail_key_path = f'projects/{project.id}/outputs/{job.id}.jpg'
+
+    if settings.use_editing_framework:
+      # Phase 4 — render via EditingPlan (deterministic or LLM-generated)
+      from app.services.editing.llm_planner import generate_plan_with_llm
+      import boto3
+      bedrock_client = None if settings.use_mock_ai else boto3.client('bedrock-runtime', region_name=settings.aws_region)
+      editing_plan = generate_plan_with_llm(
+        product_description=project.product_description,
+        storyboard=storyboard,
+        effects_config=effects_config,
+        aspect_ratio=job.aspect_ratio,
+        audio_path=audio_path,
+        music_path=music_path,
+        ass_subtitle_path=ass_subtitle_file,
+        ffmpeg_preset=settings.ffmpeg_preset,
+        project_id=project.id,
+        resolve_asset_fn=video_service._resolve_asset_path,
+        bedrock_client=bedrock_client,
+        bedrock_model=settings.bedrock_model_script,
+        use_mock=settings.use_mock_ai,
+      )
+      # Persist the plan JSON for debugging / API inspection
+      storage.store_text(f'{prefix}/editing_plan.json', editing_plan.to_json())
+      video_key, duration_sec, resolution, thumbnail_key = video_service.render_from_plan(
+        plan=editing_plan,
+        storage=storage,
+        output_key=output_key,
+        thumbnail_key=thumbnail_key_path,
+      )
+    else:
+      video_key, duration_sec, resolution, thumbnail_key = video_service.render_video(
+        project=project,
+        job_id=job.id,
+        aspect_ratio=job.aspect_ratio,
+        storyboard=storyboard,
+        storage=storage,
+        music_path=music_path,
+        effects_config=effects_config,
+        ass_subtitle_path=ass_subtitle_file,
+      )
 
     # Cleanup temp ASS file
     if ass_subtitle_file and ass_subtitle_file.exists():

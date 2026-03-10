@@ -1129,3 +1129,30 @@ def generate_variants(
     properties={'variant_count': variant_count, 'variant_group_id': jobs[0].variant_group_id if jobs else ''},
   )
   return jobs
+
+
+# ── Phase 4 — Gap C: Editing Plan Inspection ──────────────────────────────
+
+@router.get('/projects/{project_id}/jobs/{job_id}/editing-plan')
+def get_editing_plan(
+  project_id: str,
+  job_id: str,
+  current_user: AuthUser = Depends(get_current_user),
+  repo=Depends(get_repository),
+  storage=Depends(get_storage),
+):
+  """Return the editing plan JSON for a job, if one was generated."""
+  project = repo.get_project(project_id)
+  if not project or project.owner_id != current_user.user_id:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Project not found')
+  job = repo.get_job(job_id)
+  if not job or job.project_id != project_id:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Job not found')
+
+  prefix = f'projects/{project_id}/intermediate/{job_id}'
+  plan_json = storage.load_text(f'{prefix}/editing_plan.json')
+  if not plan_json:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='No editing plan found for this job')
+
+  import json
+  return json.loads(plan_json)

@@ -366,6 +366,49 @@ class VideoService:
 
     return output_key, actual_duration, resolution, None
 
+  def render_from_plan(
+    self,
+    *,
+    plan: 'EditingPlan',
+    storage: StorageService,
+    output_key: str,
+    thumbnail_key: str,
+  ) -> tuple[str, float, str, str | None]:
+    """Render a video from an EditingPlan using the editing framework compiler.
+
+    This is the new rendering path, gated behind the ``use_editing_framework``
+    feature flag.  It delegates all FFmpeg work to ``PlanCompiler``.
+
+    Returns:
+        (output_key, duration_sec, resolution, thumbnail_key | None)
+    """
+    from app.services.editing.compiler import PlanCompiler
+
+    compiler = PlanCompiler()
+
+    with tempfile.TemporaryDirectory(prefix='novareel-plan-') as temp_dir:
+      work_dir = Path(temp_dir)
+      result = compiler.compile(plan, work_dir)
+
+      if not result.success:
+        for err in result.errors:
+          logger.error('EditingPlan compile error: %s', err)
+        for warn in result.warnings:
+          logger.warning('EditingPlan compile warning: %s', warn)
+        storage.store_bytes(output_key, b'Fallback render output', content_type='video/mp4')
+        return output_key, 0.0, plan.resolution, None
+
+      for warn in result.warnings:
+        logger.warning('EditingPlan compile warning: %s', warn)
+
+      storage.store_bytes(output_key, result.video_path.read_bytes(), content_type='video/mp4')
+
+      if result.thumbnail_path and result.thumbnail_path.exists():
+        storage.store_bytes(thumbnail_key, result.thumbnail_path.read_bytes(), content_type='image/jpeg')
+        return output_key, result.duration_sec, result.resolution, thumbnail_key
+
+    return output_key, result.duration_sec, result.resolution, None
+
   # ── Private helpers ──────────────────────────────────────────────────────
 
   @staticmethod
