@@ -61,6 +61,8 @@ class ImageSegmentParams(BaseModel):
     zoom: ZoomDirection = ZoomDirection.ZOOM_IN
     zoom_speed: float = Field(0.0015, ge=0, le=0.01, description='Zoom speed per frame')
     max_zoom: float = Field(1.3, ge=1.0, le=2.0, description='Maximum zoom factor')
+    pan_x: float = Field(0.5, ge=0.0, le=1.0, description='Focal point X (0=left, 1=right) — zoom target')
+    pan_y: float = Field(0.5, ge=0.0, le=1.0, description='Focal point Y (0=top, 1=bottom) — zoom target')
     fps: int = Field(24, ge=12, le=60)
     caption_text: str | None = Field(None, description='Optional burned-in caption text')
 

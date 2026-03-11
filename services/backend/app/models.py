@@ -153,6 +153,17 @@ class GenerationJobRecord(BaseModel):
   variant_group_id: str | None = None
 
 
+class FocalRegion(BaseModel):
+  """Normalized bounding-box center and size for the primary product in an image.
+
+  All values are in [0, 1] relative to the image dimensions.
+  """
+  cx: float = Field(0.5, ge=0.0, le=1.0, description='Center X (0=left, 1=right)')
+  cy: float = Field(0.5, ge=0.0, le=1.0, description='Center Y (0=top, 1=bottom)')
+  w: float = Field(0.4, ge=0.0, le=1.0, description='Bounding box width fraction')
+  h: float = Field(0.6, ge=0.0, le=1.0, description='Bounding box height fraction')
+
+
 class StoryboardSegment(BaseModel):
   order: int
   script_line: str
@@ -162,6 +173,8 @@ class StoryboardSegment(BaseModel):
   # Phase 2 — Feature C (Stock Footage)
   media_type: Literal['image', 'video'] = 'image'
   video_path: str | None = None
+  # Phase 4 — Product-aware zoom: focal region detected by vision model
+  focal_region: FocalRegion | None = None
 
 
 class VideoResultRecord(BaseModel):

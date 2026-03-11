@@ -183,6 +183,7 @@ class VideoService:
           seg_video = temp_root / f'seg_{idx:03d}.mp4'
           asset_path = self._resolve_asset_path(segment.image_asset_id, project.id)
           if asset_path and asset_path.exists():
+            focal = segment.focal_region
             parallel_tasks.append(SegmentRenderTask(
               segment_index=idx,
               image_path=str(asset_path),
@@ -191,6 +192,8 @@ class VideoService:
               output_path=str(seg_video),
               ken_burns=True,
               ffmpeg_preset=self._settings.ffmpeg_preset,
+              pan_x=focal.cx if focal else 0.5,
+              pan_y=focal.cy if focal else 0.5,
             ))
           else:
             # Render color placeholder sequentially
@@ -216,15 +219,18 @@ class VideoService:
 
           asset_path = self._resolve_asset_path(segment.image_asset_id, project.id)
           if asset_path and asset_path.exists():
-            if idx % 2 == 0:
-              zoom_expr = f"min(zoom+0.0015,1.3)"
-            else:
-              zoom_expr = f"if(eq(on\\,1)\\,1.3\\,max(zoom-0.0015\\,1.0))"
+            from app.services.zoom_utils import build_zoompan_vf
 
-            vf = (
-              f'scale=8000:-1,'
-              f"zoompan=z='{zoom_expr}':d={total_frames}:s={width}x{height}:fps={fps},"
-              f'setsar=1'
+            focal = segment.focal_region
+            vf = build_zoompan_vf(
+              width=int(width), height=int(height),
+              duration_sec=seg_duration,
+              fps=fps,
+              zoom_dir='zoom_in' if idx % 2 == 0 else 'zoom_out',
+              zoom_speed=0.0015,
+              max_zoom=1.3,
+              pan_x=focal.cx if focal else 0.5,
+              pan_y=focal.cy if focal else 0.5,
             )
 
             if has_drawtext and segment.script_line and not ass_subtitle_path:

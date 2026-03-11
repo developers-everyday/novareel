@@ -209,17 +209,17 @@ class PlanCompiler:
         if not src.exists():
             return False
 
-        total_frames = int(seg.fps * seg.duration_sec)
+        from app.services.zoom_utils import build_zoompan_vf
 
-        if seg.zoom == ZoomDirection.ZOOM_IN:
-            zoom_expr = f'min(zoom+{seg.zoom_speed},{seg.max_zoom})'
-        else:
-            zoom_expr = f"if(eq(on\\,1)\\,{seg.max_zoom}\\,max(zoom-{seg.zoom_speed}\\,1.0))"
-
-        vf = (
-            f'scale=8000:-1,'
-            f"zoompan=z='{zoom_expr}':d={total_frames}:s={w}x{h}:fps={seg.fps},"
-            f'setsar=1'
+        vf = build_zoompan_vf(
+            width=w, height=h,
+            duration_sec=seg.duration_sec,
+            fps=seg.fps,
+            zoom_dir=seg.zoom.value,
+            zoom_speed=seg.zoom_speed,
+            max_zoom=seg.max_zoom,
+            pan_x=seg.pan_x,
+            pan_y=seg.pan_y,
         )
 
         if seg.caption_text and features.get('drawtext', False):

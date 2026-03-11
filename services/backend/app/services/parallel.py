@@ -25,6 +25,8 @@ class SegmentRenderTask:
   output_path: str
   ken_burns: bool = True
   ffmpeg_preset: str = 'medium'
+  pan_x: float = 0.5
+  pan_y: float = 0.5
 
 
 @dataclass
@@ -59,6 +61,8 @@ def _render_single_segment(task_dict: dict[str, Any]) -> dict[str, Any]:
   output_path = task_dict['output_path']
   ken_burns = task_dict.get('ken_burns', True)
   ffmpeg_preset = task_dict.get('ffmpeg_preset', 'medium')
+  pan_x = task_dict.get('pan_x', 0.5)
+  pan_y = task_dict.get('pan_y', 0.5)
 
   start = time.perf_counter()
 
@@ -73,11 +77,17 @@ def _render_single_segment(task_dict: dict[str, Any]) -> dict[str, Any]:
   try:
     # Build ffmpeg command for single segment
     if ken_burns:
-      # Ken Burns: slow zoom-in effect
-      vf = (
-        f"scale=-2:{height * 2},crop={width}:{height}:"
-        f"'({width}*0.25)*t/{duration}':0,"
-        f"zoompan=z='min(zoom+0.001,1.2)':d={int(duration * 25)}:s={width}x{height}:fps=25"
+      from app.services.zoom_utils import build_zoompan_vf
+
+      vf = build_zoompan_vf(
+        width=width, height=height,
+        duration_sec=duration,
+        fps=25,
+        zoom_dir='zoom_in' if segment_index % 2 == 0 else 'zoom_out',
+        zoom_speed=0.001,
+        max_zoom=1.2,
+        pan_x=pan_x,
+        pan_y=pan_y,
       )
     else:
       vf = f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2'
@@ -152,6 +162,8 @@ def render_segments_parallel(
       'output_path': t.output_path,
       'ken_burns': t.ken_burns,
       'ffmpeg_preset': t.ffmpeg_preset,
+      'pan_x': t.pan_x,
+      'pan_y': t.pan_y,
     }
     for t in tasks
   ]

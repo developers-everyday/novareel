@@ -266,7 +266,7 @@ def process_generation_job(
     else:
       repo.update_job(job.id, status=JobStatus.MATCHING, stage=JobStatus.MATCHING, progress_pct=45, timings=timings)
       phase_start = time.perf_counter()
-      storyboard = nova.match_images(script_lines, assets)
+      storyboard = nova.match_images(script_lines, assets, image_analysis=image_analysis)
       storage.store_text(f'{prefix}/storyboard.json', json.dumps([s.model_dump() for s in storyboard]))
       timings['matching_sec'] = round(time.perf_counter() - phase_start, 3)
 

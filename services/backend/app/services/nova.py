@@ -4,7 +4,7 @@ import json
 from typing import Sequence
 
 from app.config import Settings
-from app.models import AssetRecord, ProjectRecord, StoryboardSegment
+from app.models import AssetRecord, FocalRegion, ProjectRecord, StoryboardSegment
 
 import re
 
@@ -30,7 +30,11 @@ class NovaService:
     Returns a list of dicts: [{"asset_id": "...", "description": "..."}]
     """
     if self._settings.use_mock_ai or not assets:
-      return [{'asset_id': a.id, 'description': f'Product image: {a.filename}'} for a in assets]
+      return [{
+        'asset_id': a.id,
+        'description': f'Product image: {a.filename}',
+        'focal_region': {'cx': 0.5, 'cy': 0.5, 'w': 0.4, 'h': 0.6},
+      } for a in assets]
 
     import base64
     import logging
@@ -40,7 +44,11 @@ class NovaService:
     try:
       import boto3
     except ImportError:
-      return [{'asset_id': a.id, 'description': f'Product image: {a.filename}'} for a in assets]
+      return [{
+        'asset_id': a.id,
+        'description': f'Product image: {a.filename}',
+        'focal_region': {'cx': 0.5, 'cy': 0.5, 'w': 0.4, 'h': 0.6},
+      } for a in assets]
 
     runtime = boto3.client('bedrock-runtime', region_name=self._settings.aws_region)
     storage_root = self._settings.local_data_dir / self._settings.local_storage_dir
@@ -49,7 +57,11 @@ class NovaService:
     for asset in assets:
       image_path = storage_root / asset.object_key
       if not image_path.exists():
-        results.append({'asset_id': asset.id, 'description': f'Product image: {asset.filename}'})
+        results.append({
+          'asset_id': asset.id,
+          'description': f'Product image: {asset.filename}',
+          'focal_region': {'cx': 0.5, 'cy': 0.5, 'w': 0.4, 'h': 0.6},
+        })
         continue
 
       try:
@@ -75,25 +87,41 @@ class NovaService:
                   'Describe the product in this image in 2-3 sentences. '
                   'Focus on: what the product is, key visible features, '
                   'the angle/perspective of the shot, and any branding or text visible. '
-                  'Be specific and concise.'
+                  'Be specific and concise.\n\n'
+                  'Also estimate the bounding box of the PRIMARY product in the image. '
+                  'Return your answer as exactly two lines:\n'
+                  'Line 1: your text description\n'
+                  'Line 2: BBOX: x_min,y_min,x_max,y_max\n'
+                  'where each value is a fraction between 0 and 1 '
+                  '(0,0 = top-left corner, 1,1 = bottom-right corner). '
+                  'Example: BBOX: 0.20,0.10,0.80,0.90'
                 ),
               },
             ],
           }],
-          inferenceConfig={'maxTokens': 200, 'temperature': 0.2},
+          inferenceConfig={'maxTokens': 300, 'temperature': 0.2},
         )
 
-        description = ''
+        raw_text = ''
         for block in response['output']['message']['content']:
           if 'text' in block:
-            description = block['text'].strip()
+            raw_text = block['text'].strip()
             break
 
-        results.append({'asset_id': asset.id, 'description': description or f'Product image: {asset.filename}'})
-        log.info('Analyzed image %s: %s', asset.id, description[:80])
+        description, focal = self._parse_analysis_response(raw_text, asset.filename)
+        results.append({
+          'asset_id': asset.id,
+          'description': description,
+          'focal_region': focal,
+        })
+        log.info('Analyzed image %s: %s (focal cx=%.2f cy=%.2f)', asset.id, description[:60], focal['cx'], focal['cy'])
       except Exception as exc:
         log.warning('Failed to analyze image %s: %s', asset.id, exc)
-        results.append({'asset_id': asset.id, 'description': f'Product image: {asset.filename}'})
+        results.append({
+          'asset_id': asset.id,
+          'description': f'Product image: {asset.filename}',
+          'focal_region': {'cx': 0.5, 'cy': 0.5, 'w': 0.4, 'h': 0.6},
+        })
 
     return results
 
@@ -251,23 +279,91 @@ class NovaService:
       logging.getLogger(__name__).warning('Failed to load template %s', template_name, exc_info=True)
       return None
 
-  def match_images(self, script_lines: Sequence[str], assets: Sequence[AssetRecord]) -> list[StoryboardSegment]:
+  def match_images(
+    self,
+    script_lines: Sequence[str],
+    assets: Sequence[AssetRecord],
+    image_analysis: list[dict] | None = None,
+  ) -> list[StoryboardSegment]:
     if not assets:
       raise ValueError('No uploaded assets available for matching')
+
+    # Build a map of asset_id -> FocalRegion from analysis results
+    focal_map: dict[str, FocalRegion] = {}
+    if image_analysis:
+      for info in image_analysis:
+        fr_data = info.get('focal_region')
+        if fr_data:
+          focal_map[info['asset_id']] = FocalRegion(**fr_data)
 
     total = max(len(script_lines), 1)
     segment_length = max(4.0, 36.0 / total)
 
     if not self._settings.use_mock_ai:
       try:
-        result = self._embedding_match(script_lines, assets, segment_length)
+        result = self._embedding_match(script_lines, assets, segment_length, focal_map)
         if result is not None:
           return result
       except Exception as exc:
         import logging
         logging.getLogger(__name__).warning('Embedding match failed, falling back to round-robin: %s', exc)
 
-    return self._round_robin_match(script_lines, assets, segment_length)
+    return self._round_robin_match(script_lines, assets, segment_length, focal_map)
+
+  @staticmethod
+  def _parse_analysis_response(raw_text: str, filename: str) -> tuple[str, dict]:
+    """Parse description and bounding box from the vision model response.
+
+    Expected format:
+      <description text>
+      BBOX: x_min,y_min,x_max,y_max
+
+    Returns:
+      (description, focal_region_dict) where focal_region_dict has keys cx, cy, w, h.
+    """
+    default_focal = {'cx': 0.5, 'cy': 0.5, 'w': 0.4, 'h': 0.6}
+    if not raw_text:
+      return f'Product image: {filename}', default_focal
+
+    # Try to find BBOX line
+    bbox_match = re.search(
+      r'BBOX:\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)',
+      raw_text,
+      re.IGNORECASE,
+    )
+
+    if bbox_match:
+      try:
+        x_min = float(bbox_match.group(1))
+        y_min = float(bbox_match.group(2))
+        x_max = float(bbox_match.group(3))
+        y_max = float(bbox_match.group(4))
+        # Clamp to [0, 1]
+        x_min = max(0.0, min(1.0, x_min))
+        y_min = max(0.0, min(1.0, y_min))
+        x_max = max(0.0, min(1.0, x_max))
+        y_max = max(0.0, min(1.0, y_max))
+        # Ensure min < max
+        if x_max <= x_min or y_max <= y_min:
+          focal = default_focal
+        else:
+          focal = {
+            'cx': round((x_min + x_max) / 2, 4),
+            'cy': round((y_min + y_max) / 2, 4),
+            'w': round(x_max - x_min, 4),
+            'h': round(y_max - y_min, 4),
+          }
+      except (ValueError, TypeError):
+        focal = default_focal
+    else:
+      focal = default_focal
+
+    # Extract description (everything before the BBOX line)
+    description = re.sub(r'\n*BBOX:.*', '', raw_text, flags=re.IGNORECASE).strip()
+    if not description:
+      description = f'Product image: {filename}'
+
+    return description, focal
 
   # ------------------------------------------------------------------
   # Internal helpers
@@ -278,6 +374,7 @@ class NovaService:
     script_lines: Sequence[str],
     assets: Sequence[AssetRecord],
     segment_length: float,
+    focal_map: dict[str, FocalRegion] | None = None,
   ) -> list[StoryboardSegment] | None:
     """Return a storyboard built with embedding cosine-similarity, or None on failure."""
     import base64
@@ -381,6 +478,7 @@ class NovaService:
           image_asset_id=chosen_asset.id,
           start_sec=index * segment_length,
           duration_sec=segment_length,
+          focal_region=focal_map.get(chosen_asset.id) if focal_map else None,
         )
       )
       asset_usages[chosen_asset.id] = asset_usages.get(chosen_asset.id, 0) + 1
@@ -392,6 +490,7 @@ class NovaService:
     script_lines: Sequence[str],
     assets: Sequence[AssetRecord],
     segment_length: float,
+    focal_map: dict[str, FocalRegion] | None = None,
   ) -> list[StoryboardSegment]:
     storyboard: list[StoryboardSegment] = []
     for index, line in enumerate(script_lines):
@@ -403,6 +502,7 @@ class NovaService:
           image_asset_id=asset.id,
           start_sec=index * segment_length,
           duration_sec=segment_length,
+          focal_region=focal_map.get(asset.id) if focal_map else None,
         )
       )
     return storyboard

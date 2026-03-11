@@ -142,8 +142,8 @@ def test_video_segment_params():
 def test_planner_basic_storyboard():
     """Planner generates correct steps from a simple storyboard."""
     storyboard = [
-        StoryboardSegment(order=0, script_line='Line one', image_asset_id='img-1', duration_sec=5.0),
-        StoryboardSegment(order=1, script_line='Line two', image_asset_id='img-2', duration_sec=4.0),
+        StoryboardSegment(order=0, script_line='Line one', image_asset_id='img-1', start_sec=0.0, duration_sec=5.0),
+        StoryboardSegment(order=1, script_line='Line two', image_asset_id='img-2', start_sec=5.0, duration_sec=4.0),
     ]
     effects = VideoEffectsConfig(
         transition=TransitionConfig(xfade_name='fade', duration=0.5),
@@ -163,15 +163,19 @@ def test_planner_basic_storyboard():
     assert plan.transition_step.effect == 'fade'
 
 
-def test_planner_with_asset_resolver():
+def test_planner_with_asset_resolver(tmp_path: Path):
     """Planner uses resolve_asset_fn to set image paths."""
     storyboard = [
-        StoryboardSegment(order=0, script_line='Scene 1', image_asset_id='img-1', duration_sec=5.0),
+        StoryboardSegment(order=0, script_line='Scene 1', image_asset_id='img-1', start_sec=0.0, duration_sec=5.0),
     ]
     effects = VideoEffectsConfig()
 
+    # Create a real temp file so Path.exists() passes in the planner
+    img_file = tmp_path / 'resolved_img-1.png'
+    img_file.write_bytes(b'\x89PNG\r\n')
+
     def mock_resolver(asset_id: str, project_id: str) -> Path | None:
-        return Path(f'/tmp/resolved_{asset_id}.png')
+        return tmp_path / f'resolved_{asset_id}.png'
 
     plan = generate_plan(
         storyboard=storyboard,
@@ -183,7 +187,7 @@ def test_planner_with_asset_resolver():
     segs = plan.segment_steps
     assert len(segs) == 1
     assert isinstance(segs[0], ImageSegmentParams)
-    assert segs[0].image_path == '/tmp/resolved_img-1.png'
+    assert segs[0].image_path == str(img_file)
 
 
 def test_planner_broll_segments():
@@ -191,7 +195,7 @@ def test_planner_broll_segments():
     storyboard = [
         StoryboardSegment(
             order=0, script_line='B-roll scene', image_asset_id='img-1',
-            duration_sec=4.0, media_type='video', video_path='/tmp/broll.mp4',
+            start_sec=0.0, duration_sec=4.0, media_type='video', video_path='/tmp/broll.mp4',
         ),
     ]
     effects = VideoEffectsConfig()
@@ -206,7 +210,7 @@ def test_planner_broll_segments():
 def test_planner_includes_overlays():
     """Planner adds text overlays when effects_config has them."""
     storyboard = [
-        StoryboardSegment(order=0, script_line='Scene 1', image_asset_id='img-1', duration_sec=5.0),
+        StoryboardSegment(order=0, script_line='Scene 1', image_asset_id='img-1', start_sec=0.0, duration_sec=5.0),
     ]
     effects = VideoEffectsConfig(
         title_overlay=TextOverlay(text='My Product', font_size=56, duration_sec=3.0),
@@ -223,7 +227,7 @@ def test_planner_includes_overlays():
 def test_planner_includes_audio_and_music():
     """Planner adds audio mux and music mix when paths provided."""
     storyboard = [
-        StoryboardSegment(order=0, script_line='Scene', image_asset_id='img-1', duration_sec=5.0),
+        StoryboardSegment(order=0, script_line='Scene', image_asset_id='img-1', start_sec=0.0, duration_sec=5.0),
     ]
     effects = VideoEffectsConfig()
 
@@ -255,7 +259,7 @@ def test_planner_includes_audio_and_music():
 def test_planner_always_adds_thumbnail():
     """Planner always includes a thumbnail step."""
     storyboard = [
-        StoryboardSegment(order=0, script_line='Scene', image_asset_id='img-1', duration_sec=5.0),
+        StoryboardSegment(order=0, script_line='Scene', image_asset_id='img-1', start_sec=0.0, duration_sec=5.0),
     ]
     effects = VideoEffectsConfig()
     plan = generate_plan(storyboard=storyboard, effects_config=effects)
@@ -266,7 +270,7 @@ def test_planner_always_adds_thumbnail():
 def test_planner_aspect_ratios():
     """Planner resolves correct resolution for each aspect ratio."""
     storyboard = [
-        StoryboardSegment(order=0, script_line='Scene', image_asset_id='img-1', duration_sec=5.0),
+        StoryboardSegment(order=0, script_line='Scene', image_asset_id='img-1', start_sec=0.0, duration_sec=5.0),
     ]
     effects = VideoEffectsConfig()
 
@@ -278,8 +282,8 @@ def test_planner_aspect_ratios():
 def test_planner_no_transition_when_none():
     """Planner omits transition step when transition is 'none'."""
     storyboard = [
-        StoryboardSegment(order=0, script_line='A', image_asset_id='i1', duration_sec=5.0),
-        StoryboardSegment(order=1, script_line='B', image_asset_id='i2', duration_sec=5.0),
+        StoryboardSegment(order=0, script_line='A', image_asset_id='i1', start_sec=0.0, duration_sec=5.0),
+        StoryboardSegment(order=1, script_line='B', image_asset_id='i2', start_sec=5.0, duration_sec=5.0),
     ]
     effects = VideoEffectsConfig(
         transition=TransitionConfig(xfade_name=None, duration=0.0),
@@ -320,8 +324,8 @@ def test_llm_planner_mock_returns_deterministic():
     from app.services.editing.llm_planner import generate_plan_with_llm
 
     storyboard = [
-        StoryboardSegment(order=0, script_line='Scene 1', image_asset_id='img-1', duration_sec=5.0),
-        StoryboardSegment(order=1, script_line='Scene 2', image_asset_id='img-2', duration_sec=4.0),
+        StoryboardSegment(order=0, script_line='Scene 1', image_asset_id='img-1', start_sec=0.0, duration_sec=5.0),
+        StoryboardSegment(order=1, script_line='Scene 2', image_asset_id='img-2', start_sec=5.0, duration_sec=4.0),
     ]
     effects = VideoEffectsConfig()
 
@@ -344,7 +348,7 @@ def test_llm_planner_no_client_returns_deterministic():
     from app.services.editing.llm_planner import generate_plan_with_llm
 
     storyboard = [
-        StoryboardSegment(order=0, script_line='Scene', image_asset_id='img-1', duration_sec=5.0),
+        StoryboardSegment(order=0, script_line='Scene', image_asset_id='img-1', start_sec=0.0, duration_sec=5.0),
     ]
     effects = VideoEffectsConfig()
 
@@ -369,7 +373,7 @@ def test_llm_planner_exception_returns_fallback():
             raise RuntimeError('Simulated Bedrock failure')
 
     storyboard = [
-        StoryboardSegment(order=0, script_line='Scene', image_asset_id='img-1', duration_sec=5.0),
+        StoryboardSegment(order=0, script_line='Scene', image_asset_id='img-1', start_sec=0.0, duration_sec=5.0),
     ]
     effects = VideoEffectsConfig()
 
@@ -391,7 +395,7 @@ def test_llm_planner_with_brand_kit_assets():
     from app.services.editing.llm_planner import generate_plan_with_llm
 
     storyboard = [
-        StoryboardSegment(order=0, script_line='Scene', image_asset_id='img-1', duration_sec=5.0),
+        StoryboardSegment(order=0, script_line='Scene', image_asset_id='img-1', start_sec=0.0, duration_sec=5.0),
     ]
     effects = VideoEffectsConfig(
         logo_path=Path('/tmp/logo.png'),

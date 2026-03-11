@@ -82,11 +82,14 @@ def generate_plan(
                     image_path = str(resolved)
 
             if image_path:
+                focal = seg.focal_region
                 steps.append(ImageSegmentParams(
                     order=idx,
                     image_path=image_path,
                     duration_sec=seg.duration_sec,
                     zoom=ZoomDirection.ZOOM_IN if idx % 2 == 0 else ZoomDirection.ZOOM_OUT,
+                    pan_x=focal.cx if focal else 0.5,
+                    pan_y=focal.cy if focal else 0.5,
                     caption_text=seg.script_line if not ass_subtitle_path else None,
                 ))
             else:

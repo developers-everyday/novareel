@@ -87,6 +87,7 @@ def process_translation_job(
                 duration_sec=segment.duration_sec,
                 media_type=segment.media_type,
                 video_path=segment.video_path,
+                focal_region=segment.focal_region,
             )
             translated_storyboard.append(translated_segment)
 

@@ -31,7 +31,8 @@ The editing plan schema has these step types:
 SEGMENT STEPS (define the clips in order):
 - "image_segment": Ken-Burns zoom on a still image.
     Fields: order (int), image_path (str), duration_sec (float), zoom ("zoom_in"|"zoom_out"), \
-zoom_speed (float 0-0.01), max_zoom (float 1.0-2.0), fps (int), caption_text (str|null)
+zoom_speed (float 0-0.01), max_zoom (float 1.0-2.0), pan_x (float 0-1, focal point X), \
+pan_y (float 0-1, focal point Y), fps (int), caption_text (str|null)
 - "video_segment": Trim/scale a video clip (B-roll).
     Fields: order (int), video_path (str), duration_sec (float), fps (int), caption_text (str|null)
 - "color_segment": Solid-color placeholder.
@@ -64,7 +65,7 @@ Top-level plan fields:
 
 Rules:
 1. Keep segment order sequential starting from 0.
-2. Use creative zoom directions and speeds to make the video dynamic.
+2. Use creative zoom directions and speeds to make the video dynamic. Use pan_x/pan_y to target the product's focal region (provided in the storyboard data).
 3. Vary transition effects if appropriate for the product tone.
 4. Place title overlay in the first 3 seconds and CTA overlay in the last 4 seconds.
 5. Always include an audio_mux step if narration audio is provided.
@@ -201,6 +202,11 @@ def _invoke_llm(
             resolved = resolve_asset_fn(seg.image_asset_id, project_id)
             if resolved and Path(resolved).exists():
                 entry['image_path'] = str(resolved)
+        if seg.focal_region:
+            entry['focal_region'] = {
+                'cx': seg.focal_region.cx,
+                'cy': seg.focal_region.cy,
+            }
         storyboard_data.append(entry)
 
     user_prompt = _USER_PROMPT.format(
