@@ -7,7 +7,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-  model_config = SettingsConfigDict(env_prefix='NOVAREEL_', env_file='.env', extra='ignore')
+  model_config = SettingsConfigDict(
+    env_prefix='NOVAREEL_',
+    env_file=[
+      str(Path(__file__).resolve().parents[4] / '.env'),  # project root
+      '.env',                                              # CWD fallback
+    ],
+    extra='ignore',
+  )
 
   app_name: str = 'NovaReel API'
   env: str = 'development'

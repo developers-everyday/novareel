@@ -54,8 +54,24 @@ class MockTranscriptionBackend(TranscriptionBackend):
         if not all_words:
             all_words = ['Mock', 'transcription', 'output']
 
-        # Distribute words evenly across a 30-second duration
-        duration = 30.0
+        # Probe actual audio duration instead of hardcoding 30s
+        duration = 30.0  # fallback
+        if audio_path.exists():
+            import shutil
+            import subprocess
+            ffprobe = shutil.which('ffprobe')
+            if ffprobe:
+                result = subprocess.run(
+                    [ffprobe, '-v', 'quiet', '-show_entries', 'format=duration',
+                     '-of', 'default=noprint_wrappers=1:nokey=1', str(audio_path)],
+                    capture_output=True, check=False,
+                )
+                try:
+                    probed = float(result.stdout.decode().strip())
+                    if probed > 0.5:
+                        duration = probed
+                except (ValueError, TypeError):
+                    pass
         word_duration = duration / len(all_words)
         timings: list[WordTiming] = []
         for i, word in enumerate(all_words):

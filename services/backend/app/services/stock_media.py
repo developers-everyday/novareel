@@ -117,9 +117,12 @@ class StockMediaService:
             return []
 
         results: list[dict] = []
+        total_videos = len(data.get("videos", []))
+        filtered_count = 0
         for video in data.get("videos", []):
             duration = video.get("duration", 0)
             if duration < min_duration or duration > max_duration:
+                filtered_count += 1
                 continue
 
             # Find the best quality video file (prefer HD)
@@ -148,7 +151,12 @@ class StockMediaService:
         # Cache the results
         self._save_to_cache(query, orientation, results)
 
-        logger.info("Pexels search '%s' returned %d clips", query, len(results))
+        if filtered_count > 0 and not results:
+            logger.warning(
+                "Pexels search '%s': all %d results filtered by duration (%d-%ds) — consider widening range",
+                query, total_videos, min_duration, max_duration,
+            )
+        logger.info("Pexels search '%s' returned %d clips (%d/%d filtered by duration)", query, len(results), filtered_count, total_videos)
         return results
 
     def download_clip(self, video_url: str, output_path: Path) -> Path | None:

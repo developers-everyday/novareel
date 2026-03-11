@@ -14,6 +14,23 @@ from app.services.storage import StorageService
 logger = logging.getLogger(__name__)
 
 
+def _probe_duration(ffprobe_path: str | None, file_path: Path) -> float | None:
+  """Probe the duration of a media file using ffprobe. Returns seconds or None."""
+  if not ffprobe_path or not file_path.exists():
+    return None
+  result = subprocess.run(
+    [ffprobe_path, '-v', 'quiet',
+     '-show_entries', 'format=duration',
+     '-of', 'default=noprint_wrappers=1:nokey=1',
+     str(file_path)],
+    capture_output=True, check=False,
+  )
+  try:
+    dur = float(result.stdout.decode().strip())
+    return dur if dur > 0 else None
+  except (ValueError, TypeError):
+    return None
+
 
 class VideoService:
   def __init__(self, settings: Settings):
@@ -39,8 +56,8 @@ class VideoService:
 
   @staticmethod
   def _detect_ffmpeg_features(ffmpeg_path: str) -> dict[str, bool]:
-    """Detect available ffmpeg filters (drawtext, ass, xfade)."""
-    features = {'drawtext': False, 'ass': False, 'xfade': False}
+    """Detect available ffmpeg filters (drawtext, ass, subtitles, xfade)."""
+    features = {'drawtext': False, 'ass': False, 'subtitles': False, 'xfade': False}
     try:
       result = subprocess.run(
         [ffmpeg_path, '-filters'], capture_output=True, check=False,
@@ -48,6 +65,7 @@ class VideoService:
       stdout = result.stdout
       features['drawtext'] = b'drawtext' in stdout
       features['ass'] = b' ass ' in stdout or b'libass' in stdout
+      features['subtitles'] = b'subtitles' in stdout
       features['xfade'] = b'xfade' in stdout
     except Exception:
       pass
@@ -87,6 +105,7 @@ class VideoService:
     has_drawtext = features['drawtext']
     has_xfade = features['xfade']
     has_ass = features['ass']
+    has_subtitles = features['subtitles']
 
     use_transitions = (
       has_xfade
@@ -296,22 +315,80 @@ class VideoService:
         if logo_overlaid:
           joined_video = logo_overlaid
 
-      # ── Burn ASS subtitles if provided ──────────────────────────────────
-      if ass_subtitle_path and ass_subtitle_path.exists() and has_ass:
+      # ── Burn subtitles if provided (fallback chain: ASS → SRT → warning) ──
+      subtitles_burned = False
+      if ass_subtitle_path and ass_subtitle_path.exists():
         subtitled = temp_root / 'subtitled.mp4'
-        sub_cmd = [
-          ffmpeg_path, '-y',
-          '-i', str(joined_video),
-          '-vf', f"ass='{ass_subtitle_path}'",
-          '-c:v', 'libx264', '-preset', self._settings.ffmpeg_preset, '-c:a', 'copy',
-          str(subtitled),
-        ]
-        sub_result = subprocess.run(sub_cmd, check=False, capture_output=True)
-        if sub_result.returncode == 0 and subtitled.exists():
-          joined_video = subtitled
-          logger.info('ASS subtitles burned in successfully')
-        else:
-          logger.warning('ASS subtitle burn-in failed, continuing without')
+
+        # Attempt 1: ASS filter (requires libass)
+        if has_ass and not subtitles_burned:
+          sub_cmd = [
+            ffmpeg_path, '-y',
+            '-i', str(joined_video),
+            '-vf', f"ass='{ass_subtitle_path}'",
+            '-c:v', 'libx264', '-preset', self._settings.ffmpeg_preset, '-c:a', 'copy',
+            str(subtitled),
+          ]
+          sub_result = subprocess.run(sub_cmd, check=False, capture_output=True)
+          if sub_result.returncode == 0 and subtitled.exists():
+            joined_video = subtitled
+            subtitles_burned = True
+            logger.info('Subtitles burned via ASS filter')
+
+        # Attempt 2: subtitles filter with SRT (also uses libass but sometimes available separately)
+        if has_subtitles and not subtitles_burned:
+          # Convert ASS to SRT for the subtitles filter
+          from app.services.subtitle_utils import build_srt
+          srt_path = temp_root / 'captions.srt'
+          srt_path.write_text(build_srt(storyboard))
+          sub_cmd = [
+            ffmpeg_path, '-y',
+            '-i', str(joined_video),
+            '-vf', f"subtitles='{srt_path}'",
+            '-c:v', 'libx264', '-preset', self._settings.ffmpeg_preset, '-c:a', 'copy',
+            str(subtitled),
+          ]
+          sub_result = subprocess.run(sub_cmd, check=False, capture_output=True)
+          if sub_result.returncode == 0 and subtitled.exists():
+            joined_video = subtitled
+            subtitles_burned = True
+            logger.info('Subtitles burned via SRT subtitles filter')
+
+        # Attempt 3: drawtext filter (requires libfreetype)
+        if has_drawtext and not subtitles_burned:
+          # Burn each storyboard line as a drawtext overlay
+          drawtext_filters: list[str] = []
+          t_offset = 0.0
+          for seg in storyboard:
+            if seg.script_line:
+              escaped = seg.script_line.replace("'", "\u2019").replace(":", "\\:")
+              drawtext_filters.append(
+                f"drawtext=text='{escaped}'"
+                f":fontsize=36:fontcolor=white:borderw=2:bordercolor=black"
+                f":x=(w-text_w)/2:y=h-80"
+                f":enable='between(t,{t_offset:.2f},{t_offset + seg.duration_sec:.2f})'"
+              )
+            t_offset += seg.duration_sec
+          if drawtext_filters:
+            vf = ','.join(drawtext_filters)
+            sub_cmd = [
+              ffmpeg_path, '-y',
+              '-i', str(joined_video),
+              '-vf', vf,
+              '-c:v', 'libx264', '-preset', self._settings.ffmpeg_preset, '-c:a', 'copy',
+              str(subtitled),
+            ]
+            sub_result = subprocess.run(sub_cmd, check=False, capture_output=True)
+            if sub_result.returncode == 0 and subtitled.exists():
+              joined_video = subtitled
+              subtitles_burned = True
+              logger.info('Subtitles burned via drawtext filter')
+
+        if not subtitles_burned:
+          logger.warning(
+            'Caption burn-in skipped: ffmpeg lacks libass/drawtext/subtitles filters. '
+            'To fix, run: brew reinstall ffmpeg   (or install ffmpeg with --enable-libass --enable-libfreetype)'
+          )
 
       # ── Mux audio ────────────────────────────────────────────────────────
       final_video = joined_video
@@ -333,21 +410,45 @@ class VideoService:
       # ── Mix background music ──────────────────────────────────────────
       if music_path and music_path.exists():
         music_muxed = temp_root / 'music_muxed.mp4'
-        music_cmd = [
-          ffmpeg_path, '-y',
-          '-i', str(final_video),
-          '-i', str(music_path),
-          '-filter_complex',
-          '[1:a]aloop=loop=-1:size=2e+09,volume=0.12[bg];[0:a][bg]amix=inputs=2:duration=first',
-          '-c:v', 'copy', '-c:a', 'aac',
-          str(music_muxed),
-        ]
+
+        # Probe whether the video already has an audio stream
+        has_video_audio = False
+        probe_cmd = [ffmpeg_path, '-i', str(final_video), '-hide_banner']
+        probe_result = subprocess.run(probe_cmd, capture_output=True, check=False)
+        probe_output = (probe_result.stderr or b'').decode(errors='replace')
+        has_video_audio = 'Audio:' in probe_output
+
+        if has_video_audio:
+          # Mix music with existing audio
+          music_cmd = [
+            ffmpeg_path, '-y',
+            '-i', str(final_video),
+            '-i', str(music_path),
+            '-filter_complex',
+            '[1:a]aloop=loop=-1:size=2e+09,volume=0.12[bg];[0:a][bg]amix=inputs=2:duration=first',
+            '-c:v', 'copy', '-c:a', 'aac',
+            str(music_muxed),
+          ]
+        else:
+          # No audio stream — add music as the sole audio track
+          music_cmd = [
+            ffmpeg_path, '-y',
+            '-i', str(final_video),
+            '-i', str(music_path),
+            '-filter_complex',
+            '[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg]',
+            '-map', '0:v', '-map', '[bg]',
+            '-c:v', 'copy', '-c:a', 'aac', '-shortest',
+            str(music_muxed),
+          ]
+
         music_result = subprocess.run(music_cmd, check=False, capture_output=True)
         if music_result.returncode == 0 and music_muxed.exists():
           final_video = music_muxed
-          logger.info('Background music mixed successfully')
+          logger.info('Background music mixed successfully (had_audio=%s)', has_video_audio)
         else:
-          logger.warning('Music mux failed, using narration-only audio')
+          logger.warning('Music mux failed (stderr=%s), using previous audio',
+                         (music_result.stderr or b'')[:200].decode(errors='replace'))
 
       # ── Thumbnail ────────────────────────────────────────────────────────
       thumb_cmd = [
@@ -444,21 +545,49 @@ class VideoService:
     if len(seg_paths) < 2:
       return seg_paths[0] if seg_paths else None
 
+    # Probe actual file durations — storyboard values can drift from
+    # the real rendered length (especially for B-roll clips).
+    ffprobe_path = shutil.which('ffprobe')
+    actual_durations: list[float] = []
+    for i, p in enumerate(seg_paths):
+      probed = _probe_duration(ffprobe_path, p)
+      if probed is not None:
+        actual_durations.append(probed)
+      else:
+        actual_durations.append(seg_durations[i])  # fallback
+
+    # Ensure every segment is longer than the transition
+    for dur in actual_durations:
+      if dur <= transition_duration:
+        logger.warning('Segment duration %.3fs <= transition %.3fs, skipping xfade', dur, transition_duration)
+        return None
+
     input_args: list[str] = []
     for p in seg_paths:
       input_args.extend(['-i', str(p)])
 
-    filter_parts: list[str] = []
+    # Normalize all inputs to the same timebase and framerate before xfade.
+    # Segments from different sources (Pexels B-roll vs rendered images) can
+    # have mismatched timebases which causes xfade to fail with EINVAL.
+    norm_parts: list[str] = []
+    for i in range(len(seg_paths)):
+      norm_parts.append(f'[{i}:v]settb=AVTB,fps=24[n{i}]')
+
+    filter_parts: list[str] = list(norm_parts)
     cumulative_offset = 0.0
 
     for i in range(len(seg_paths) - 1):
       if i == 0:
-        src = '[0:v]'
+        src = f'[n0]'
       else:
         src = f'[v{i}]'
 
-      cumulative_offset += seg_durations[i] - transition_duration
+      # Subtract a one-frame margin (~0.042s at 24fps) to prevent offsets
+      # from landing exactly at the frame-level boundary of the chained output.
+      cumulative_offset += actual_durations[i] - transition_duration - 0.042
       offset = max(0, cumulative_offset)
+
+      second_input = f'[n{i+1}]'
 
       if i == len(seg_paths) - 2:
         output_label = '[vout]'
@@ -466,10 +595,11 @@ class VideoService:
         output_label = f'[v{i+1}]'
 
       filter_parts.append(
-        f"{src}[{i+1}:v]xfade=transition={xfade_name}:duration={transition_duration}:offset={offset:.3f}{output_label}"
+        f"{src}{second_input}xfade=transition={xfade_name}:duration={transition_duration}:offset={offset:.3f}{output_label}"
       )
 
     filter_graph = ';'.join(filter_parts)
+    logger.info('xfade filter graph: %s', filter_graph)
     xfade_video = temp_root / 'xfade.mp4'
 
     cmd = [
@@ -484,7 +614,7 @@ class VideoService:
     result = subprocess.run(cmd, check=False, capture_output=True)
     if result.returncode != 0:
       err = result.stderr.decode('utf-8', errors='replace')
-      logger.warning('xfade failed, falling back to concat: %s', err[-300:])
+      logger.warning('xfade failed (durations=%s), falling back to concat: %s', actual_durations, err[-300:])
       return None
     return xfade_video if xfade_video.exists() else None
 

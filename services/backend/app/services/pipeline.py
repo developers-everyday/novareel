@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import shutil
+import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +18,47 @@ from app.services.subtitle_utils import build_srt
 from app.services.video import VideoService
 
 logger = logging.getLogger(__name__)
+
+
+def _probe_audio_duration(audio_path: Path) -> float | None:
+  """Probe the duration of an audio file using ffprobe (preferred) or ffmpeg.
+
+  Returns the duration in seconds, or None if probing fails.
+  """
+  if not audio_path.exists() or audio_path.stat().st_size <= 100:
+    return None
+
+  ffprobe = shutil.which('ffprobe')
+  if ffprobe:
+    result = subprocess.run(
+      [ffprobe, '-v', 'quiet',
+       '-show_entries', 'format=duration',
+       '-of', 'default=noprint_wrappers=1:nokey=1',
+       str(audio_path)],
+      capture_output=True, check=False,
+    )
+    try:
+      duration = float(result.stdout.decode().strip())
+      if duration > 0.5:
+        return duration
+    except (ValueError, TypeError):
+      pass
+    return None
+
+  # Fallback: parse "Duration: HH:MM:SS.xx" from ffmpeg stderr
+  ffmpeg_path = shutil.which('ffmpeg')
+  if not ffmpeg_path:
+    return None
+  result = subprocess.run(
+    [ffmpeg_path, '-i', str(audio_path), '-hide_banner'],
+    capture_output=True, check=False,
+  )
+  m = re.search(r'Duration:\s*(\d+):(\d+):(\d[\d.]+)', result.stderr.decode(errors='replace'))
+  if m:
+    duration = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    if duration > 0.5:
+      return duration
+  return None
 
 
 def _fetch_stock_footage(
@@ -85,12 +129,38 @@ def _fetch_stock_footage(
   downloaded_clips: list[tuple[int, Path, float]] = []  # (scene_index, path, duration)
 
   for i, query in enumerate(search_queries):
+    scene_order = i + 1  # 1-based to match storyboard segment.order
     # For product_lifestyle: alternate (every other scene gets B-roll)
     # For lifestyle_focus: most scenes get B-roll
     if video_style == 'product_lifestyle' and i % 2 == 0:
       continue  # Keep product image for even scenes
     elif video_style == 'lifestyle_focus' and i == 0:
       continue  # Keep first scene as product image
+
+    clip_path = clips_dir / f'broll_{scene_order:03d}.mp4'
+    seg_duration = storyboard[i].duration_sec if i < len(storyboard) else 5.0
+
+    if settings.use_mock_ai:
+      # Mock mode: generate a solid-color placeholder clip via ffmpeg
+      # instead of making real HTTP calls to Pexels.
+      _ffmpeg = shutil.which('ffmpeg')
+      if _ffmpeg:
+        _width, _height = ('1920', '1080') if aspect_ratio == '16:9' else (
+          ('1080', '1080') if aspect_ratio == '1:1' else ('1080', '1920')
+        )
+        subprocess.run([
+          _ffmpeg, '-y', '-f', 'lavfi',
+          '-i', f'color=c=#334155:s={_width}x{_height}:d={seg_duration}',
+          '-vf', 'setsar=1', '-t', str(seg_duration),
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+          '-r', '24', str(clip_path),
+        ], check=False, capture_output=True)
+      if clip_path.exists() and clip_path.stat().st_size > 100:
+        downloaded_clips.append((scene_order, clip_path, seg_duration))
+        logger.info('Mock mode: generated placeholder B-roll for scene %d', scene_order)
+      else:
+        logger.warning('Mock mode: failed to generate placeholder B-roll for scene %d', scene_order)
+      continue
 
     results = stock_service.search_videos(query, orientation=orientation)
     if not results:
@@ -99,16 +169,12 @@ def _fetch_stock_footage(
 
     # Pick the first result
     clip_info = results[0]
-    clip_path = clips_dir / f'broll_{i:03d}.mp4'
 
-    if settings.use_mock_ai:
-      # Skip B-roll in mock mode — placeholder bytes aren't valid video
-      logger.info('Mock mode: skipping B-roll download for scene %d', i)
-      continue
+    downloaded = stock_service.download_clip(clip_info['url'], clip_path)
+    if downloaded:
+      downloaded_clips.append((scene_order, clip_path, min(clip_info['duration'], 5)))
     else:
-      downloaded = stock_service.download_clip(clip_info['url'], clip_path)
-      if downloaded:
-        downloaded_clips.append((i, clip_path, min(clip_info['duration'], 5)))
+      logger.warning('B-roll download failed for scene %d (query: %s)', scene_order, query)
 
   # Update storyboard with B-roll segments
   if not downloaded_clips:
@@ -134,6 +200,12 @@ def _fetch_stock_footage(
     else:
       # Keep original image segment
       updated_storyboard.append(segment)
+
+  # B1-c: Recalculate start_sec after B-roll duration truncation may have changed durations
+  running_start = 0.0
+  for seg in updated_storyboard:
+    seg.start_sec = round(running_start, 3)
+    running_start += seg.duration_sec
 
   logger.info('Updated storyboard with %d B-roll clips', len(downloaded_clips))
   return updated_storyboard
@@ -277,6 +349,18 @@ def process_generation_job(
 
       storage.store_bytes(audio_key, audio_payload, content_type='audio/mpeg')
 
+      # If mock AI, regenerate audio as valid silence via ffmpeg so mux/music work
+      # Duration matches storyboard total so audio/video stay in sync
+      if settings.use_mock_ai and audio_path.exists():
+        _ffmpeg = shutil.which('ffmpeg')
+        if _ffmpeg:
+          mock_duration = sum(s.duration_sec for s in storyboard) or 36.0
+          subprocess.run([
+            _ffmpeg, '-y', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono',
+            '-t', str(mock_duration), '-c:a', 'libmp3lame', '-q:a', '9', str(audio_path),
+          ], check=False, capture_output=True)
+          logger.info('Replaced mock audio with valid ffmpeg-generated silence (%.1fs)', mock_duration)
+
       # Phase 3 — Audio post-processing (silence trim + normalize)
       if not settings.use_mock_ai and audio_path.exists() and audio_path.stat().st_size > 100:
         from app.services.audio import AudioProcessor
@@ -291,6 +375,32 @@ def process_generation_job(
       timings['narration_sec'] = round(time.perf_counter() - phase_start, 3)
 
     transcript_url = storage.get_public_url(transcript_key)
+
+    # ── RECONCILE AUDIO / VIDEO DURATIONS ─────────────────────────
+    # Probe real audio duration and rescale storyboard segments so
+    # the video timeline matches the narration exactly.
+    audio_duration = _probe_audio_duration(audio_path)
+    if audio_duration:
+      total_sb_duration = sum(s.duration_sec for s in storyboard)
+      if total_sb_duration > 0 and abs(audio_duration - total_sb_duration) > 0.5:
+        # Only stretch image segments — B-roll clips have a hard duration
+        # ceiling (the source file length) and can't be extended, which would
+        # cause xfade offset miscalculations if we inflated their duration.
+        broll_total = sum(s.duration_sec for s in storyboard if s.media_type == 'video')
+        image_total = total_sb_duration - broll_total
+        stretch_budget = audio_duration - broll_total
+        image_scale = stretch_budget / image_total if image_total > 0 else 1.0
+
+        running_start = 0.0
+        for seg in storyboard:
+          if seg.media_type != 'video':
+            seg.duration_sec = round(seg.duration_sec * image_scale, 3)
+          seg.start_sec = round(running_start, 3)
+          running_start += seg.duration_sec
+        logger.info(
+          'Reconciled storyboard duration: %.1fs → %.1fs (image_scale=%.3f, broll_fixed=%.1fs)',
+          total_sb_duration, audio_duration, image_scale, broll_total,
+        )
 
     # Compute resolution for ASS subtitle generation and render
     ass_resolution, _ = video_service._resolution_for(job.aspect_ratio)
