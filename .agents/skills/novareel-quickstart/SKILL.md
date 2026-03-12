@@ -20,8 +20,10 @@ A user uploads product images, writes a short description, and the system delive
 | Backend API | FastAPI (Python 3.12), Pydantic v2, Uvicorn |
 | Async Worker | `services/backend/worker.py` — polls a local queue |
 | AI — Script | Amazon Bedrock `amazon.nova-lite-v1:0` |
-| AI — Voice | Amazon Polly (TTS → MP3) |
-| AI — Matching | Round-robin today → `amazon.nova-multimodal-embeddings-v1` planned |
+| AI — Voice | **Nova 2 Sonic** (default TTS), Polly, EdgeTTS, ElevenLabs as fallbacks |
+| AI — Matching | Embedding cosine-similarity via `amazon.nova-2-multimodal-embeddings-v1:0` (fallback: round-robin) |
+| AI — B-Roll Director | Nova Vision plans per-scene media decisions + validates stock footage relevance |
+| AI — Image Gen | **Nova 2 Omni** (`amazon.nova-omni-v2:0`) generates brand campaign images from product photos |
 | Video Render | ffmpeg (local image slideshow → MP4) |
 | Storage (dev) | Local filesystem under `services/backend/data/storage/` |
 | Storage (prod) | AWS S3 + DynamoDB |
@@ -44,10 +46,15 @@ marketting-tool/
       config.py              # All settings (pydantic-settings, @lru_cache)
       models.py              # Pydantic request/response models
       services/
-        nova.py              # Bedrock script gen + Polly voice synth
+        nova.py              # Bedrock script gen (returns ScriptScene list)
+        broll_director.py    # Vision Director — plans/validates B-roll
+        image_generator.py   # Nova Omni — AI image generation for brand campaigns
         video.py             # ffmpeg slideshow rendering
         pipeline.py          # Full job orchestration
         storage.py           # Local / S3 abstraction
+      services/voice/
+        factory.py           # Voice provider factory (nova_sonic, polly, edge_tts, elevenlabs)
+        nova_sonic.py        # Nova 2 Sonic TTS provider (default)
       repositories/
         local.py             # JSON file-based repo (dev)
         dynamo.py            # DynamoDB repo (prod)
@@ -98,9 +105,10 @@ Browser → PUT  <upload_url>          → upload image (auth token required)
 Browser → POST /v1/projects/{id}/generate → enqueue job
 
 worker.py polls queue →
-  nova.generate_script()   → Bedrock Nova Lite → 6 narration lines
-  nova.match_images()      → round-robin image assignment (embeddings planned)
-  nova.synthesize_voice()  → Polly → MP3 audio
+  nova.generate_script()   → Bedrock Nova Lite → 6 ScriptScene (narration + visual_requirements)
+  nova.match_images()      → embedding cosine-sim image assignment (fallback: round-robin)
+  _fetch_stock_footage()   → Vision Director plans B-roll/AI-gen → Pexels fetch + Nova Omni → validation
+  voice_provider.synthesize() → Nova Sonic (default) / Polly / EdgeTTS → MP3 audio
   video.render_video()     → ffmpeg slideshow → MP4 + thumbnail
   → save .mp4, .mp3, .srt, .txt to storage
   → mark job COMPLETED
@@ -124,8 +132,7 @@ worker.py polls queue →
 
 ## Pending Work
 
-- **Embedding-based image matching** — see `embedding_image_matching_plan.md` in the agent brain directory.
-  Replace `match_images()` round-robin with cosine similarity using `amazon.nova-multimodal-embeddings-v1`.
+- **TikTok + Instagram Publishing** — Phase 4 Gap B.
 
 ---
 

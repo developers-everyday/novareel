@@ -148,7 +148,7 @@ class MusicMixParams(BaseModel):
     """Mix background music with volume ducking."""
     type: Literal['music_mix'] = 'music_mix'
     music_path: str
-    volume: float = Field(0.12, ge=0, le=1.0, description='Music volume (0–1)')
+    volume: float = Field(0.18, ge=0, le=1.0, description='Music volume (0–1)')
     loop: bool = Field(True, description='Loop music to match video duration')
 
 

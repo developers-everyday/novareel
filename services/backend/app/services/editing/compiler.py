@@ -477,15 +477,42 @@ class PlanCompiler:
     def _mux_audio(
         self, work_dir: Path, input_video: Path, step: AudioMuxParams,
     ) -> Path | None:
+        """Mux narration audio onto the video track.
+
+        Does NOT use -shortest so that narration always plays in full.
+        If the audio is longer than the video, the video is padded with
+        its last frame to match the audio duration.
+        """
         audio = Path(step.audio_path)
         if not audio.exists() or audio.stat().st_size < 100:
             return None
 
+        # Probe durations to decide whether video needs padding
+        ffprobe_path = shutil.which('ffprobe')
+        audio_dur = _probe_duration(ffprobe_path, audio)
+        video_dur = _probe_duration(ffprobe_path, input_video)
+
+        mux_input = input_video
+        if audio_dur and video_dur and audio_dur > video_dur + 0.1:
+            padded = work_dir / 'padded_for_audio.mp4'
+            pad_dur = audio_dur - video_dur + 0.5
+            pad_cmd = [
+                self._ffmpeg, '-y',
+                '-i', str(input_video),
+                '-vf', f'tpad=stop_mode=clone:stop_duration={pad_dur:.2f}',
+                '-c:v', 'libx264', '-preset', 'medium',
+                '-pix_fmt', 'yuv420p',
+                str(padded),
+            ]
+            if self._run(pad_cmd, 'audio-mux video pad') and padded.exists():
+                mux_input = padded
+                logger.info('Padded video by %.1fs to match audio duration', pad_dur)
+
         output = work_dir / 'muxed.mp4'
         cmd = [
             self._ffmpeg, '-y',
-            '-i', str(input_video), '-i', str(audio),
-            '-c:v', 'copy', '-c:a', step.codec, '-shortest',
+            '-i', str(mux_input), '-i', str(audio),
+            '-c:v', 'copy', '-c:a', step.codec,
             str(output),
         ]
         ok = self._run(cmd, 'audio mux')
@@ -498,17 +525,41 @@ class PlanCompiler:
         if not music.exists():
             return None
 
-        loop_filter = 'aloop=loop=-1:size=2e+09,' if step.loop else ''
-        fc = f'[1:a]{loop_filter}volume={step.volume}[bg];[0:a][bg]amix=inputs=2:duration=first'
+        # Probe whether the video already has an audio stream
+        probe_result = subprocess.run(
+            [self._ffmpeg, '-i', str(input_video), '-hide_banner'],
+            capture_output=True, check=False,
+        )
+        has_audio = 'Audio:' in (probe_result.stderr or b'').decode(errors='replace')
 
+        loop_args = ['-stream_loop', '-1'] if step.loop else []
         output = work_dir / 'music.mp4'
-        cmd = [
-            self._ffmpeg, '-y',
-            '-i', str(input_video), '-i', str(music),
-            '-filter_complex', fc,
-            '-c:v', 'copy', '-c:a', 'aac',
-            str(output),
-        ]
+
+        if has_audio:
+            fc = (
+                f'[1:a]volume={step.volume}[bg];'
+                f'[0:a][bg]amix=inputs=2:duration=first:normalize=0:dropout_transition=0'
+            )
+            cmd = [
+                self._ffmpeg, '-y',
+                '-i', str(input_video),
+                *loop_args, '-i', str(music),
+                '-filter_complex', fc,
+                '-c:v', 'copy', '-c:a', 'aac',
+                str(output),
+            ]
+        else:
+            fc = f'[1:a]volume={step.volume}[bg]'
+            cmd = [
+                self._ffmpeg, '-y',
+                '-i', str(input_video),
+                *loop_args, '-i', str(music),
+                '-filter_complex', fc,
+                '-map', '0:v', '-map', '[bg]',
+                '-c:v', 'copy', '-c:a', 'aac', '-shortest',
+                str(output),
+            ]
+
         ok = self._run(cmd, 'music mix')
         return output if ok and output.exists() else None
 

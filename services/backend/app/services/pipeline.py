@@ -9,7 +9,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.models import GenerationJobRecord, JobStatus, StoryboardSegment, VideoResultRecord
+from app.models import GenerationJobRecord, JobStatus, ScriptScene, StoryboardSegment, VideoResultRecord
 from app.repositories.base import Repository
 from app.services.effects import VideoEffectsConfig
 from app.services.nova import NovaService
@@ -61,11 +61,39 @@ def _probe_audio_duration(audio_path: Path) -> float | None:
   return None
 
 
+def _select_cleanest_image(image_analysis: list[dict]) -> str | None:
+  """Pick the product image with the least text/branding from analysis.
+
+  Scans image_analysis descriptions for keywords that indicate overlaid text,
+  logos, or branding.  Returns the asset_id of the image whose description
+  contains the fewest such indicators — i.e. the "cleanest" product shot
+  best suited as a reference for Nova Canvas.
+  """
+  if not image_analysis:
+    return None
+
+  text_indicators = [
+    'text', 'logo', 'label', 'branding', 'watermark', 'lettering',
+    'typography', 'caption', 'tagline', 'slogan', 'brand name',
+  ]
+
+  scored: list[tuple[int, str]] = []
+  for info in image_analysis:
+    desc = (info.get('description') or '').lower()
+    penalty = sum(1 for kw in text_indicators if kw in desc)
+    scored.append((penalty, info['asset_id']))
+
+  scored.sort(key=lambda x: x[0])
+  return scored[0][1] if scored else None
+
+
 def _fetch_stock_footage(
   *,
   storyboard: list[StoryboardSegment],
   script_lines: list[str],
+  script_scenes: list[ScriptScene] | None = None,
   product_description: str,
+  image_analysis: list[dict] | None = None,
   aspect_ratio: str,
   video_style: str,
   storage: StorageService,
@@ -74,10 +102,16 @@ def _fetch_stock_footage(
 ) -> list[StoryboardSegment]:
   """Fetch stock footage clips and interleave with product images.
 
+  When the Vision Director is enabled, it plans per-scene media decisions
+  (product_closeup / broll / product_in_context), generates targeted search
+  queries, and validates downloaded clips for relevance.
+
   Args:
     storyboard: Original storyboard with product images
     script_lines: Script lines for search query generation
+    script_scenes: ScriptScene list with visual_requirements (used by Vision Director)
     product_description: Product description for context
+    image_analysis: Image analysis results from the ANALYZING stage
     aspect_ratio: Video aspect ratio (16:9, 1:1, 9:16)
     video_style: 'product_lifestyle' or 'lifestyle_focus'
     storage: Storage service for downloading clips
@@ -105,6 +139,31 @@ def _fetch_stock_footage(
   cache_dir = settings.local_data_dir / 'cache' / 'pexels'
   stock_service = StockMediaService(settings.pexels_api_key, cache_dir=cache_dir)
 
+  # Determine orientation from aspect ratio
+  orientation = get_orientation_for_aspect_ratio(aspect_ratio)
+
+  # Fetch and download clips
+  storage_root = settings.local_data_dir / settings.local_storage_dir
+  clips_dir = storage_root / 'projects' / project_id / 'clips' / job_id
+  clips_dir.mkdir(parents=True, exist_ok=True)
+
+  # ── Vision Director path ─────────────────────────────────────────
+  if settings.use_vision_director and script_scenes:
+    return _fetch_stock_footage_with_director(
+      storyboard=storyboard,
+      script_scenes=script_scenes,
+      product_description=product_description,
+      image_analysis=image_analysis,
+      aspect_ratio=aspect_ratio,
+      video_style=video_style,
+      stock_service=stock_service,
+      orientation=orientation,
+      clips_dir=clips_dir,
+      settings=settings,
+      project_id=project_id,
+    )
+
+  # ── Legacy path (fallback) ──────────────────────────────────────
   # Generate search queries using LLM
   if settings.use_mock_ai:
     search_queries = generate_search_queries(
@@ -117,14 +176,6 @@ def _fetch_stock_footage(
       script_lines, product_description, bedrock_client,
       settings.bedrock_model_script, use_mock=False,
     )
-
-  # Determine orientation from aspect ratio
-  orientation = get_orientation_for_aspect_ratio(aspect_ratio)
-
-  # Fetch and download clips
-  storage_root = settings.local_data_dir / settings.local_storage_dir
-  clips_dir = storage_root / 'projects' / project_id / 'clips' / job_id
-  clips_dir.mkdir(parents=True, exist_ok=True)
 
   downloaded_clips: list[tuple[int, Path, float]] = []  # (scene_index, path, duration)
 
@@ -211,6 +262,228 @@ def _fetch_stock_footage(
   return updated_storyboard
 
 
+def _fetch_stock_footage_with_director(
+  *,
+  storyboard: list[StoryboardSegment],
+  script_scenes: list[ScriptScene],
+  product_description: str,
+  image_analysis: list[dict] | None,
+  aspect_ratio: str,
+  video_style: str,
+  stock_service: 'StockMediaService',
+  orientation: str,
+  clips_dir: Path,
+  settings: 'Settings',
+  project_id: str = '',
+) -> list[StoryboardSegment]:
+  """Vision Director path: plan, fetch, and validate B-roll clips."""
+  from app.services.broll_director import BRollDirector
+
+  director = BRollDirector(settings)
+
+  # Step 1: Plan — let Nova Vision decide per-scene media type + queries
+  scene_plan = director.plan_scenes(
+    script_scenes=script_scenes,
+    image_analysis=image_analysis or [],
+    product_description=product_description,
+    video_style=video_style,
+  )
+
+  downloaded_clips: dict[int, tuple[Path, float, str, float | None, bool]] = {}
+  # Maps scene_order -> (clip_path, duration, query, relevance_score, is_ai_generated)
+
+  for i, plan_entry in enumerate(scene_plan):
+    if i >= len(storyboard):
+      break
+
+    scene_order = i + 1
+    media_decision = plan_entry.get('media_type', 'product_closeup')
+
+    if media_decision == 'product_closeup':
+      # Keep the product image — optionally update focal_region from director
+      if plan_entry.get('focal_override'):
+        fo = plan_entry['focal_override']
+        from app.models import FocalRegion
+        storyboard[i].focal_region = FocalRegion(
+          cx=fo.get('cx', 0.5), cy=fo.get('cy', 0.5),
+          w=fo.get('w', 0.4), h=fo.get('h', 0.6),
+        )
+      continue
+
+    if media_decision == 'product_in_context':
+      # Keep product image but with different framing suggested by director
+      if plan_entry.get('focal_override'):
+        fo = plan_entry['focal_override']
+        from app.models import FocalRegion
+        storyboard[i].focal_region = FocalRegion(
+          cx=fo.get('cx', 0.5), cy=fo.get('cy', 0.5),
+          w=fo.get('w', 0.6), h=fo.get('h', 0.8),
+        )
+      continue
+
+    if media_decision == 'ai_generated':
+      # Generate a contextual image using Nova Canvas
+      from app.services.image_generator import ImageGenerator
+      from app.services.video import VideoService
+
+      image_prompt = plan_entry.get('image_prompt', 'Product in a lifestyle setting')
+      visual_req = script_scenes[i].visual_requirements if i < len(script_scenes) else ''
+      gen_image_path = clips_dir / f'ai_gen_{scene_order:03d}.jpg'
+      clip_path = clips_dir / f'ai_gen_{scene_order:03d}.mp4'
+      seg_duration = storyboard[i].duration_sec
+
+      # Pick the cleanest product image (least text/branding) as reference
+      # for Nova Canvas, rather than defaulting to the segment's assigned image.
+      product_img_path = None
+      video_svc = VideoService(settings)
+      if image_analysis and project_id:
+        best_asset_id = _select_cleanest_image(image_analysis)
+        if best_asset_id:
+          product_img_path = video_svc._resolve_asset_path(best_asset_id, project_id)
+
+      # Fallback to the segment's assigned image
+      if product_img_path is None and storyboard[i].image_asset_id and project_id:
+        product_img_path = video_svc._resolve_asset_path(
+          storyboard[i].image_asset_id, project_id,
+        )
+
+      img_gen = ImageGenerator(settings)
+      generated = img_gen.generate_scene_image(
+        product_image_path=product_img_path,
+        scene_description=image_prompt,
+        visual_requirements=visual_req,
+        product_description=product_description,
+        output_path=gen_image_path,
+        aspect_ratio=aspect_ratio,
+      )
+
+      if generated:
+        # Convert the generated image into a video segment
+        video_seg = img_gen.generate_scene_video_from_image(
+          image_path=gen_image_path,
+          duration_sec=seg_duration,
+          output_path=clip_path,
+          aspect_ratio=aspect_ratio,
+        )
+        if video_seg:
+          downloaded_clips[scene_order] = (clip_path, seg_duration, f'[ai] {image_prompt[:50]}', 10.0, True)
+          logger.info('Scene %d: AI-generated image → video (prompt: %s)', scene_order, image_prompt[:60])
+          continue
+
+      logger.warning('Scene %d: AI image generation failed, keeping product image', scene_order)
+      continue
+
+    # media_decision == 'broll'
+    query = plan_entry.get('search_query', 'lifestyle product usage')
+    clip_path = clips_dir / f'broll_{scene_order:03d}.mp4'
+    seg_duration = storyboard[i].duration_sec
+
+    if settings.use_mock_ai:
+      _ffmpeg = shutil.which('ffmpeg')
+      if _ffmpeg:
+        _width, _height = ('1920', '1080') if aspect_ratio == '16:9' else (
+          ('1080', '1080') if aspect_ratio == '1:1' else ('1080', '1920')
+        )
+        subprocess.run([
+          _ffmpeg, '-y', '-f', 'lavfi',
+          '-i', f'color=c=#334155:s={_width}x{_height}:d={seg_duration}',
+          '-vf', 'setsar=1', '-t', str(seg_duration),
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+          '-r', '24', str(clip_path),
+        ], check=False, capture_output=True)
+      if clip_path.exists() and clip_path.stat().st_size > 100:
+        downloaded_clips[scene_order] = (clip_path, seg_duration, query, 10.0, False)
+        logger.info('Mock mode: generated placeholder B-roll for scene %d (query: %s)', scene_order, query)
+      continue
+
+    # Fetch candidates from Pexels and validate with Vision
+    results = stock_service.search_videos(query, orientation=orientation)
+    if not results:
+      logger.warning('No stock footage found for query: %s (scene %d)', query, scene_order)
+      continue
+
+    acceptance_criteria = plan_entry.get('acceptance_criteria', '')
+    max_candidates = settings.broll_max_candidates
+    best_clip = None
+    best_score = 0.0
+
+    for candidate in results[:max_candidates]:
+      temp_clip = clips_dir / f'broll_{scene_order:03d}_candidate.mp4'
+      downloaded = stock_service.download_clip(candidate['url'], temp_clip)
+      if not downloaded:
+        continue
+
+      # Validate with Vision Director
+      score = director.validate_clip(
+        clip_path=temp_clip,
+        scene_narration=script_scenes[i].narration if i < len(script_scenes) else '',
+        visual_requirements=script_scenes[i].visual_requirements if i < len(script_scenes) else '',
+        acceptance_criteria=acceptance_criteria,
+      )
+
+      if score >= settings.broll_validation_threshold:
+        # Move candidate to final path
+        if temp_clip != clip_path:
+          shutil.move(str(temp_clip), str(clip_path))
+        best_clip = clip_path
+        best_score = score
+        logger.info('Scene %d: accepted B-roll (query=%s, score=%.1f)', scene_order, query, score)
+        break
+      elif score > best_score:
+        best_score = score
+        best_clip = temp_clip
+
+      # Cleanup rejected candidate
+      if temp_clip.exists() and temp_clip != clip_path:
+        temp_clip.unlink(missing_ok=True)
+
+    if best_clip and best_score >= settings.broll_validation_threshold:
+      if best_clip != clip_path and best_clip.exists():
+        shutil.move(str(best_clip), str(clip_path))
+      downloaded_clips[scene_order] = (
+        clip_path, min(results[0]['duration'], seg_duration), query, best_score, False,
+      )
+    else:
+      logger.warning('Scene %d: all candidates rejected (best_score=%.1f, threshold=%.1f), keeping product image',
+                      scene_order, best_score, settings.broll_validation_threshold)
+
+  # Build updated storyboard
+  if not downloaded_clips:
+    logger.info('Vision Director: no B-roll clips passed validation, keeping original storyboard')
+    return storyboard
+
+  updated_storyboard: list[StoryboardSegment] = []
+  for segment in storyboard:
+    if segment.order in downloaded_clips:
+      clip_path, clip_duration, query, score, ai_gen = downloaded_clips[segment.order]
+      updated_storyboard.append(StoryboardSegment(
+        order=segment.order,
+        script_line=segment.script_line,
+        image_asset_id=segment.image_asset_id,
+        start_sec=segment.start_sec,
+        duration_sec=min(segment.duration_sec, clip_duration),
+        media_type='video',
+        video_path=str(clip_path),
+        focal_region=segment.focal_region,
+        visual_requirements=segment.visual_requirements,
+        broll_query=query,
+        broll_relevance_score=score,
+        is_ai_generated=ai_gen,
+      ))
+    else:
+      updated_storyboard.append(segment)
+
+  # Recalculate start_sec
+  running_start = 0.0
+  for seg in updated_storyboard:
+    seg.start_sec = round(running_start, 3)
+    running_start += seg.duration_sec
+
+  accepted = len(downloaded_clips)
+  logger.info('Vision Director: updated storyboard with %d validated B-roll clips', accepted)
+  return updated_storyboard
+
+
 def process_generation_job(
   *,
   repo: Repository,
@@ -234,60 +507,130 @@ def process_generation_job(
     # Intermediate artifact prefix for resumable pipeline (Feature D)
     prefix = f'projects/{project.id}/intermediate/{job.id}'
 
-    # ── ANALYZING ──────────────────────────────────────────────────
-    existing_analysis = storage.load_text(f'{prefix}/image_analysis.json')
-    if existing_analysis:
-      image_analysis = json.loads(existing_analysis)
-      logger.info('Resuming: skipped ANALYZING (cached)')
-    else:
-      repo.update_job(job.id, status=JobStatus.ANALYZING, stage=JobStatus.ANALYZING, progress_pct=10)
-      phase_start = time.perf_counter()
-      image_analysis = nova.analyze_images(assets)
-      storage.store_text(f'{prefix}/image_analysis.json', json.dumps(image_analysis))
-      timings['analyzing_sec'] = round(time.perf_counter() - phase_start, 3)
+    # ── AGENTIC ORCHESTRATOR (Nova Pro) ────────────────────────────
+    # When enabled, Nova Pro orchestrates ANALYZING → SCRIPTING → MATCHING → MEDIA
+    # as a single intelligent loop, replacing the linear sequence below.
+    from app.config import get_settings
+    settings = get_settings()
 
-    # ── SCRIPTING ──────────────────────────────────────────────────
-    existing_script = storage.load_text(f'{prefix}/script_lines.json')
-    if existing_script:
-      script_lines = json.loads(existing_script)
-      logger.info('Resuming: skipped SCRIPTING (cached)')
-    else:
-      repo.update_job(job.id, status=JobStatus.SCRIPTING, stage=JobStatus.SCRIPTING, progress_pct=25)
-      phase_start = time.perf_counter()
-      script_lines = nova.generate_script(project, image_analysis=image_analysis, language=job.language, script_template=job.script_template)
-      storage.store_text(f'{prefix}/script_lines.json', json.dumps(script_lines))
-      timings['scripting_sec'] = round(time.perf_counter() - phase_start, 3)
-
-    # ── MATCHING ───────────────────────────────────────────────────
-    existing_storyboard = storage.load_text(f'{prefix}/storyboard.json')
-    if existing_storyboard:
-      storyboard = [StoryboardSegment(**s) for s in json.loads(existing_storyboard)]
-      logger.info('Resuming: skipped MATCHING (cached)')
-    else:
-      repo.update_job(job.id, status=JobStatus.MATCHING, stage=JobStatus.MATCHING, progress_pct=45, timings=timings)
-      phase_start = time.perf_counter()
-      storyboard = nova.match_images(script_lines, assets, image_analysis=image_analysis)
-      storage.store_text(f'{prefix}/storyboard.json', json.dumps([s.model_dump() for s in storyboard]))
-      timings['matching_sec'] = round(time.perf_counter() - phase_start, 3)
-
-    # ── STOCK FOOTAGE (Feature C) ─────────────────────────────────
-    if job.video_style and job.video_style != 'product_only':
-      existing_broll = storage.load_text(f'{prefix}/storyboard_with_broll.json')
-      if existing_broll:
-        storyboard = [StoryboardSegment(**s) for s in json.loads(existing_broll)]
-        logger.info('Resuming: skipped STOCK FOOTAGE (cached)')
+    if settings.use_agentic_orchestrator:
+      existing_orchestrator = storage.load_text(f'{prefix}/orchestrator_result.json')
+      if existing_orchestrator:
+        orch_data = json.loads(existing_orchestrator)
+        image_analysis = orch_data.get('image_analysis', [])
+        script_scenes = [ScriptScene(**s) for s in orch_data.get('script_scenes', [])]
+        script_lines = orch_data.get('script_lines', [])
+        storyboard = [StoryboardSegment(**s) for s in orch_data.get('storyboard', [])]
+        if orch_data.get('review_notes'):
+          repo.update_job(job.id, review_notes=orch_data['review_notes'])
+        logger.info('Resuming: skipped ORCHESTRATOR (cached)')
       else:
-        storyboard = _fetch_stock_footage(
-          storyboard=storyboard,
-          script_lines=script_lines,
-          product_description=project.product_description,
-          aspect_ratio=job.aspect_ratio,
-          video_style=job.video_style,
-          storage=storage,
-          project_id=project.id,
-          job_id=job.id,
+        repo.update_job(job.id, status=JobStatus.ANALYZING, stage=JobStatus.ANALYZING, progress_pct=10)
+
+        from app.services.orchestrator import PipelineOrchestrator
+        storage_root = settings.local_data_dir / settings.local_storage_dir
+        clips_dir = storage_root / 'projects' / project.id / 'clips' / job.id
+        clips_dir.mkdir(parents=True, exist_ok=True)
+
+        phase_start = time.perf_counter()
+        orchestrator = PipelineOrchestrator(
+          settings=settings, nova=nova, storage=storage, repo=repo,
         )
-        storage.store_text(f'{prefix}/storyboard_with_broll.json', json.dumps([s.model_dump() for s in storyboard]))
+        orch_result = orchestrator.run(
+          project=project, job=job, assets=assets, clips_dir=clips_dir,
+        )
+        timings['orchestrator_sec'] = round(time.perf_counter() - phase_start, 3)
+
+        image_analysis = orch_result.image_analysis
+        script_scenes = orch_result.script_scenes
+        script_lines = orch_result.script_lines
+        storyboard = orch_result.storyboard
+
+        if orch_result.review_notes:
+          repo.update_job(job.id, review_notes=orch_result.review_notes)
+
+        # Persist all orchestrator artifacts for resume
+        storage.store_text(f'{prefix}/image_analysis.json', json.dumps(image_analysis))
+        storage.store_text(f'{prefix}/script_lines.json', json.dumps(script_lines))
+        storage.store_text(f'{prefix}/script_scenes.json', json.dumps([s.model_dump() for s in script_scenes]))
+        storage.store_text(f'{prefix}/storyboard.json', json.dumps([s.model_dump() for s in storyboard]))
+        storage.store_text(f'{prefix}/orchestrator_result.json', json.dumps({
+          'image_analysis': image_analysis,
+          'script_scenes': [s.model_dump() for s in script_scenes],
+          'script_lines': script_lines,
+          'storyboard': [s.model_dump() for s in storyboard],
+          'review_notes': orch_result.review_notes,
+          'summary': orch_result.summary,
+        }))
+        logger.info('Orchestrator complete: %d scenes, %d storyboard segments (%.1fs)',
+                     len(script_scenes), len(storyboard), timings.get('orchestrator_sec', 0))
+
+    else:
+      # ── LINEAR PIPELINE (legacy fallback) ──────────────────────────
+
+      # ── ANALYZING ──────────────────────────────────────────────────
+      existing_analysis = storage.load_text(f'{prefix}/image_analysis.json')
+      if existing_analysis:
+        image_analysis = json.loads(existing_analysis)
+        logger.info('Resuming: skipped ANALYZING (cached)')
+      else:
+        repo.update_job(job.id, status=JobStatus.ANALYZING, stage=JobStatus.ANALYZING, progress_pct=10)
+        phase_start = time.perf_counter()
+        image_analysis = nova.analyze_images(assets)
+        storage.store_text(f'{prefix}/image_analysis.json', json.dumps(image_analysis))
+        timings['analyzing_sec'] = round(time.perf_counter() - phase_start, 3)
+
+      # ── SCRIPTING ──────────────────────────────────────────────────
+      existing_script = storage.load_text(f'{prefix}/script_lines.json')
+      existing_scenes = storage.load_text(f'{prefix}/script_scenes.json')
+      if existing_script:
+        script_lines = json.loads(existing_script)
+        if existing_scenes:
+          script_scenes = [ScriptScene(**s) for s in json.loads(existing_scenes)]
+        else:
+          script_scenes = [ScriptScene(narration=line) for line in script_lines]
+        logger.info('Resuming: skipped SCRIPTING (cached)')
+      else:
+        repo.update_job(job.id, status=JobStatus.SCRIPTING, stage=JobStatus.SCRIPTING, progress_pct=25)
+        phase_start = time.perf_counter()
+        script_scenes = nova.generate_script(project, image_analysis=image_analysis, language=job.language, script_template=job.script_template)
+        script_lines = [s.narration for s in script_scenes]
+        storage.store_text(f'{prefix}/script_lines.json', json.dumps(script_lines))
+        storage.store_text(f'{prefix}/script_scenes.json', json.dumps([s.model_dump() for s in script_scenes]))
+        timings['scripting_sec'] = round(time.perf_counter() - phase_start, 3)
+
+      # ── MATCHING ───────────────────────────────────────────────────
+      existing_storyboard = storage.load_text(f'{prefix}/storyboard.json')
+      if existing_storyboard:
+        storyboard = [StoryboardSegment(**s) for s in json.loads(existing_storyboard)]
+        logger.info('Resuming: skipped MATCHING (cached)')
+      else:
+        repo.update_job(job.id, status=JobStatus.MATCHING, stage=JobStatus.MATCHING, progress_pct=45, timings=timings)
+        phase_start = time.perf_counter()
+        storyboard = nova.match_images(script_lines, assets, image_analysis=image_analysis)
+        storage.store_text(f'{prefix}/storyboard.json', json.dumps([s.model_dump() for s in storyboard]))
+        timings['matching_sec'] = round(time.perf_counter() - phase_start, 3)
+
+      # ── STOCK FOOTAGE (Feature C) ─────────────────────────────────
+      if job.video_style and job.video_style != 'product_only':
+        existing_broll = storage.load_text(f'{prefix}/storyboard_with_broll.json')
+        if existing_broll:
+          storyboard = [StoryboardSegment(**s) for s in json.loads(existing_broll)]
+          logger.info('Resuming: skipped STOCK FOOTAGE (cached)')
+        else:
+          storyboard = _fetch_stock_footage(
+            storyboard=storyboard,
+            script_lines=script_lines,
+            script_scenes=script_scenes,
+            product_description=project.product_description,
+            image_analysis=image_analysis,
+            aspect_ratio=job.aspect_ratio,
+            video_style=job.video_style,
+            storage=storage,
+            project_id=project.id,
+            job_id=job.id,
+          )
+          storage.store_text(f'{prefix}/storyboard_with_broll.json', json.dumps([s.model_dump() for s in storyboard]))
 
     # ── Phase 3 Feature D: AWAITING_APPROVAL gate ─────────────────
     if not job.auto_approve:
@@ -383,23 +726,43 @@ def process_generation_job(
     if audio_duration:
       total_sb_duration = sum(s.duration_sec for s in storyboard)
       if total_sb_duration > 0 and abs(audio_duration - total_sb_duration) > 0.5:
-        # Only stretch image segments — B-roll clips have a hard duration
-        # ceiling (the source file length) and can't be extended, which would
-        # cause xfade offset miscalculations if we inflated their duration.
-        broll_total = sum(s.duration_sec for s in storyboard if s.media_type == 'video')
-        image_total = total_sb_duration - broll_total
-        stretch_budget = audio_duration - broll_total
-        image_scale = stretch_budget / image_total if image_total > 0 else 1.0
+        # Only stretch image segments and AI-generated segments — real B-roll
+        # clips (from Pexels) have a hard duration ceiling (the source file
+        # length) and can't be extended.  AI-generated segments are rendered
+        # from still images and CAN be stretched.
+        def _is_fixed_duration(s: StoryboardSegment) -> bool:
+          return s.media_type == 'video' and not s.is_ai_generated
+
+        fixed_total = sum(s.duration_sec for s in storyboard if _is_fixed_duration(s))
+        stretchable_total = total_sb_duration - fixed_total
+        stretch_budget = audio_duration - fixed_total
+        stretch_scale = stretch_budget / stretchable_total if stretchable_total > 0 else 1.0
 
         running_start = 0.0
         for seg in storyboard:
-          if seg.media_type != 'video':
-            seg.duration_sec = round(seg.duration_sec * image_scale, 3)
+          if not _is_fixed_duration(seg):
+            seg.duration_sec = round(seg.duration_sec * stretch_scale, 3)
           seg.start_sec = round(running_start, 3)
           running_start += seg.duration_sec
         logger.info(
-          'Reconciled storyboard duration: %.1fs → %.1fs (image_scale=%.3f, broll_fixed=%.1fs)',
-          total_sb_duration, audio_duration, image_scale, broll_total,
+          'Reconciled storyboard duration: %.1fs → %.1fs (stretch_scale=%.3f, fixed=%.1fs)',
+          total_sb_duration, audio_duration, stretch_scale, fixed_total,
+        )
+
+      # Safety net: if total is still shorter than audio (e.g. rounding or
+      # all segments are fixed-duration B-roll), extend the last segment.
+      final_sb_duration = sum(s.duration_sec for s in storyboard)
+      if audio_duration and final_sb_duration < audio_duration - 0.1 and storyboard:
+        gap = round(audio_duration - final_sb_duration + 0.2, 3)
+        storyboard[-1].duration_sec = round(storyboard[-1].duration_sec + gap, 3)
+        # Recalculate start_sec for the last segment
+        if len(storyboard) > 1:
+          storyboard[-1].start_sec = round(
+            sum(s.duration_sec for s in storyboard[:-1]), 3,
+          )
+        logger.info(
+          'Safety-net: extended last segment by %.1fs to cover audio (%.1fs → %.1fs)',
+          gap, final_sb_duration, sum(s.duration_sec for s in storyboard),
         )
 
     # Compute resolution for ASS subtitle generation and render

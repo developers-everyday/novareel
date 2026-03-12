@@ -44,6 +44,7 @@ class Settings(BaseSettings):
   bedrock_model_script: str = 'amazon.nova-lite-v1:0'
   bedrock_model_embeddings: str = 'amazon.nova-2-multimodal-embeddings-v1:0'
   bedrock_model_voice: str = 'amazon.nova-sonic-v1:0'
+  bedrock_model_image: str = 'amazon.nova-canvas-v1:0'  # Nova Canvas — image generation
   polly_voice_id: str = 'Joanna'
   elevenlabs_api_key: str | None = None
   use_mock_ai: bool = True
@@ -59,7 +60,7 @@ class Settings(BaseSettings):
   worker_poll_seconds: int = 4
   worker_retry_backoff_seconds: int = 20
   prompt_templates_dir: str = Field(default_factory=lambda: str(Path(__file__).resolve().parents[2] / 'prompt_templates'))
-  default_voice_provider: str = 'polly'  # 'polly', 'edge_tts', or 'elevenlabs'
+  default_voice_provider: str = 'polly'  # 'nova_sonic', 'polly', 'edge_tts', or 'elevenlabs'
   transcription_backend: str = 'mock'  # 'aws_transcribe', 'whisper', or 'mock'
   whisper_model: str = 'base'
   pexels_api_key: str | None = None
@@ -84,6 +85,14 @@ class Settings(BaseSettings):
   cdn_base_url: str | None = None  # CloudFront URL (empty = direct S3/local)
   # Phase 4 — Gap C: LLM-Oriented Editing Framework
   use_editing_framework: bool = False  # When True, render via EditingPlan instead of legacy path
+  # Vision Director — smart B-roll planning
+  use_vision_director: bool = True  # When True, use Nova Vision to plan/validate B-roll
+  broll_validation_threshold: float = 6.0  # Minimum relevance score (0-10) for B-roll clips
+  broll_max_candidates: int = 3  # Max Pexels results to validate before fallback
+  # Agentic Orchestrator — Nova Pro drives the pipeline
+  bedrock_model_orchestrator: str = 'amazon.nova-pro-v1:0'  # reasoning / orchestration
+  use_agentic_orchestrator: bool = True  # When True, Nova Pro orchestrates the pipeline
+  orchestrator_max_turns: int = 10  # safety cap on agentic loop iterations
 
 
 @lru_cache

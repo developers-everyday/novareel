@@ -88,7 +88,7 @@ class GenerateRequest(BaseModel):
 class TranslateRequest(BaseModel):
   """Request body for POST /v1/projects/{project_id}/jobs/{job_id}/translate."""
   target_languages: list[str]
-  voice_provider: Literal['polly', 'edge_tts', 'elevenlabs'] = 'edge_tts'
+  voice_provider: Literal['polly', 'edge_tts', 'elevenlabs'] = 'polly'
   voice_gender: Literal['male', 'female'] = 'female'
 
 
@@ -151,6 +151,8 @@ class GenerationJobRecord(BaseModel):
   # Phase 3
   auto_approve: bool = True
   variant_group_id: str | None = None
+  # Agentic orchestrator
+  review_notes: str | None = None  # Script review notes from the orchestrator
 
 
 class FocalRegion(BaseModel):
@@ -164,6 +166,12 @@ class FocalRegion(BaseModel):
   h: float = Field(0.6, ge=0.0, le=1.0, description='Bounding box height fraction')
 
 
+class ScriptScene(BaseModel):
+  """A single scene from the script generator, preserving visual requirements."""
+  narration: str
+  visual_requirements: str = ''
+
+
 class StoryboardSegment(BaseModel):
   order: int
   script_line: str
@@ -175,6 +183,11 @@ class StoryboardSegment(BaseModel):
   video_path: str | None = None
   # Phase 4 — Product-aware zoom: focal region detected by vision model
   focal_region: FocalRegion | None = None
+  # Vision Director metadata
+  visual_requirements: str | None = None
+  broll_query: str | None = None
+  broll_relevance_score: float | None = None
+  is_ai_generated: bool = False
 
 
 class VideoResultRecord(BaseModel):

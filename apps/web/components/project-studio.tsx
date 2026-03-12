@@ -78,7 +78,7 @@ export function ProjectStudio() {
   // Translation modal state
   const [showTranslateModal, setShowTranslateModal] = useState(false);
   const [translateLanguages, setTranslateLanguages] = useState<string[]>([]);
-  const [translateVoiceProvider, setTranslateVoiceProvider] = useState('edge_tts');
+  const [translateVoiceProvider, setTranslateVoiceProvider] = useState('polly');
   const [translateVoiceGender, setTranslateVoiceGender] = useState('female');
   const [translating, setTranslating] = useState(false);
 
@@ -880,8 +880,8 @@ export function ProjectStudio() {
                   value={translateVoiceProvider}
                   onChange={(e) => setTranslateVoiceProvider(e.target.value)}
                 >
+                  <option value="polly">Amazon Polly (Default)</option>
                   <option value="edge_tts">Edge TTS (Free · 50+ languages)</option>
-                  <option value="polly">Amazon Polly</option>
                   <option value="elevenlabs">ElevenLabs (Premium)</option>
                 </select>
               </label>

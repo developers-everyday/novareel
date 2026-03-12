@@ -71,8 +71,8 @@ class StockMediaService:
         self,
         query: str,
         orientation: str = "landscape",
-        min_duration: int = 3,
-        max_duration: int = 15,
+        min_duration: int = 2,
+        max_duration: int = 30,
         per_page: int = 5,
     ) -> list[dict]:
         """Search Pexels for stock video clips.

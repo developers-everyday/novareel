@@ -84,7 +84,7 @@ class AudioProcessor:
       # Write final output
       if current != input_path:
         shutil.copy2(current, output_path)
-      else:
+      elif input_path.resolve() != output_path.resolve():
         shutil.copy2(input_path, output_path)
 
       return output_path

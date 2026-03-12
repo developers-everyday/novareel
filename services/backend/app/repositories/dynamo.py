@@ -261,6 +261,7 @@ class DynamoRepository(Repository):
     next_attempt_at: datetime | None = None,
     dead_lettered: bool | None = None,
     dead_letter_reason: str | None = None,
+    review_notes: str | None = None,
   ) -> GenerationJobRecord:
     job = self.get_job(job_id)
     if not job:
@@ -288,6 +289,8 @@ class DynamoRepository(Repository):
       job.dead_lettered = dead_lettered
     if dead_letter_reason is not None or job.dead_letter_reason:
       job.dead_letter_reason = dead_letter_reason
+    if review_notes is not None:
+      job.review_notes = review_notes
     job.updated_at = self._utcnow()
 
     self._jobs.put_item(Item=job.model_dump(mode='json'))

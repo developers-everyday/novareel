@@ -318,6 +318,7 @@ class LocalRepository(Repository):
     next_attempt_at: datetime | None = None,
     dead_lettered: bool | None = None,
     dead_letter_reason: str | None = None,
+    review_notes: str | None = None,
   ) -> GenerationJobRecord:
     store = self._load()
     raw = store['jobs'].get(job_id)
@@ -352,6 +353,9 @@ class LocalRepository(Repository):
 
     if dead_letter_reason is not None or raw.get('dead_letter_reason'):
       raw['dead_letter_reason'] = dead_letter_reason
+
+    if review_notes is not None:
+      raw['review_notes'] = review_notes
 
     raw['updated_at'] = _utcnow().isoformat()
     store['jobs'][job_id] = raw

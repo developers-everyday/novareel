@@ -106,6 +106,7 @@ class Repository(ABC):
     next_attempt_at: datetime | None = None,
     dead_lettered: bool | None = None,
     dead_letter_reason: str | None = None,
+    review_notes: str | None = None,
   ) -> GenerationJobRecord:
     raise NotImplementedError
 

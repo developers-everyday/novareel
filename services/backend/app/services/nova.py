@@ -4,7 +4,7 @@ import json
 from typing import Sequence
 
 from app.config import Settings
-from app.models import AssetRecord, FocalRegion, ProjectRecord, StoryboardSegment
+from app.models import AssetRecord, FocalRegion, ProjectRecord, ScriptScene, StoryboardSegment
 
 import re
 
@@ -135,7 +135,7 @@ class NovaService:
     image_analysis: list[dict] | None = None,
     language: str = 'en',
     script_template: str = 'product_showcase',
-  ) -> list[str]:
+  ) -> list[ScriptScene]:
     if self._settings.use_mock_ai:
       return self._mock_script(project)
 
@@ -248,10 +248,15 @@ class NovaService:
           tool_use = content_block['toolUse']
           if tool_use['name'] == 'render_video_plan':
             scenes = tool_use['input']['scenes']
-            # Extract just the spoken narration for the rest of the pipeline
-            lines = [scene['spoken_narration'].strip() for scene in scenes]
-            if lines:
-              return lines
+            result = [
+              ScriptScene(
+                narration=scene['spoken_narration'].strip(),
+                visual_requirements=scene.get('visual_requirements', ''),
+              )
+              for scene in scenes
+            ]
+            if result:
+              return result
 
     except Exception as exc:
       import logging
@@ -511,12 +516,13 @@ class NovaService:
   # app.services.voice.factory.build_voice_provider()
 
   @staticmethod
-  def _mock_script(project: ProjectRecord) -> list[str]:
-    return [
-      f'Introducing {project.title}, designed for modern sellers.',
-      'Capture buyer attention in the first three seconds.',
-      'Highlight the top value proposition with visual proof.',
-      'Show quality details and practical everyday usage.',
-      'Reinforce trust with concise product benefits and social proof.',
-      'Close with a clear call to action for immediate purchase.',
+  def _mock_script(project: ProjectRecord) -> list[ScriptScene]:
+    scenes = [
+      (f'Introducing {project.title}, designed for modern sellers.', 'Product hero shot, clean background'),
+      ('Capture buyer attention in the first three seconds.', 'Eye-catching lifestyle scene with the product'),
+      ('Highlight the top value proposition with visual proof.', 'Close-up of product key feature'),
+      ('Show quality details and practical everyday usage.', 'Person using the product in daily life'),
+      ('Reinforce trust with concise product benefits and social proof.', 'Customer testimonial or social proof overlay'),
+      ('Close with a clear call to action for immediate purchase.', 'Product with CTA text overlay'),
     ]
+    return [ScriptScene(narration=n, visual_requirements=v) for n, v in scenes]

@@ -397,14 +397,43 @@ class VideoService:
           )
 
       # ── Mux audio ────────────────────────────────────────────────────────
+      # NOTE: Do NOT use -shortest here — if the audio (narration) is longer
+      # than the video track, -shortest would cut off the narration.  Without
+      # it, ffmpeg holds the last video frame while audio finishes playing.
       final_video = joined_video
       if audio_path.exists() and audio_path.stat().st_size > 100:
         muxed = temp_root / 'muxed.mp4'
+
+        # Probe audio duration so we can ensure video covers it
+        ffprobe_path = shutil.which('ffprobe')
+        audio_dur = _probe_duration(ffprobe_path, audio_path)
+        video_dur = _probe_duration(ffprobe_path, joined_video)
+
+        if audio_dur and video_dur and audio_dur > video_dur + 0.1:
+          # Extend video with last-frame padding so it matches audio length
+          padded = temp_root / 'padded.mp4'
+          pad_dur = audio_dur - video_dur + 0.5  # small buffer
+          pad_cmd = [
+            ffmpeg_path, '-y',
+            '-i', str(joined_video),
+            '-vf', f'tpad=stop_mode=clone:stop_duration={pad_dur:.2f}',
+            '-c:v', 'libx264', '-preset', self._settings.ffmpeg_preset,
+            '-pix_fmt', 'yuv420p',
+            str(padded),
+          ]
+          pad_result = subprocess.run(pad_cmd, check=False, capture_output=True)
+          if pad_result.returncode == 0 and padded.exists():
+            joined_video = padded
+            logger.info('Padded video by %.1fs to match audio (video=%.1fs, audio=%.1fs)',
+                        pad_dur, video_dur, audio_dur)
+          else:
+            logger.warning('Video padding failed, muxing as-is (narration may extend past video)')
+
         mux_cmd = [
           ffmpeg_path, '-y',
           '-i', str(joined_video),
           '-i', str(audio_path),
-          '-c:v', 'copy', '-c:a', 'aac', '-shortest',
+          '-c:v', 'copy', '-c:a', 'aac',
           str(muxed),
         ]
         result = subprocess.run(mux_cmd, check=False, capture_output=True)
@@ -425,13 +454,13 @@ class VideoService:
         has_video_audio = 'Audio:' in probe_output
 
         if has_video_audio:
-          # Mix music with existing audio
+          # Mix music with existing audio — use -stream_loop for reliable looping
           music_cmd = [
             ffmpeg_path, '-y',
             '-i', str(final_video),
-            '-i', str(music_path),
+            '-stream_loop', '-1', '-i', str(music_path),
             '-filter_complex',
-            '[1:a]aloop=loop=-1:size=2e+09,volume=0.12[bg];[0:a][bg]amix=inputs=2:duration=first',
+            '[1:a]volume=0.18[bg];[0:a][bg]amix=inputs=2:duration=first:normalize=0:dropout_transition=0',
             '-c:v', 'copy', '-c:a', 'aac',
             str(music_muxed),
           ]
@@ -440,21 +469,24 @@ class VideoService:
           music_cmd = [
             ffmpeg_path, '-y',
             '-i', str(final_video),
-            '-i', str(music_path),
+            '-stream_loop', '-1', '-i', str(music_path),
             '-filter_complex',
-            '[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg]',
+            '[1:a]volume=0.25[bg]',
             '-map', '0:v', '-map', '[bg]',
             '-c:v', 'copy', '-c:a', 'aac', '-shortest',
             str(music_muxed),
           ]
 
-        music_result = subprocess.run(music_cmd, check=False, capture_output=True)
-        if music_result.returncode == 0 and music_muxed.exists():
-          final_video = music_muxed
-          logger.info('Background music mixed successfully (had_audio=%s)', has_video_audio)
-        else:
-          logger.warning('Music mux failed (stderr=%s), using previous audio',
-                         (music_result.stderr or b'')[:200].decode(errors='replace'))
+        try:
+          music_result = subprocess.run(music_cmd, check=False, capture_output=True, timeout=120)
+          if music_result.returncode == 0 and music_muxed.exists():
+            final_video = music_muxed
+            logger.info('Background music mixed successfully (had_audio=%s)', has_video_audio)
+          else:
+            logger.warning('Music mux failed (stderr=%s), using previous audio',
+                           (music_result.stderr or b'')[:200].decode(errors='replace'))
+        except subprocess.TimeoutExpired:
+          logger.warning('Music mux timed out after 120s, using previous audio')
 
       # ── Thumbnail ────────────────────────────────────────────────────────
       thumb_cmd = [
