@@ -19,11 +19,12 @@ A user uploads product images, writes a short description, and the system delive
 | Frontend | Next.js 14 (App Router), Clerk auth, TypeScript |
 | Backend API | FastAPI (Python 3.12), Pydantic v2, Uvicorn |
 | Async Worker | `services/backend/worker.py` — polls a local queue |
-| AI — Script | Amazon Bedrock `amazon.nova-lite-v1:0` |
+| AI — Orchestrator | **Nova Pro** (`amazon.nova-pro-v1:0`) — agentic pipeline orchestrator (tool-use loop) |
+| AI — Script | Amazon Bedrock `amazon.nova-lite-v1:0` (called by orchestrator) |
 | AI — Voice | **Nova 2 Sonic** (default TTS), Polly, EdgeTTS, ElevenLabs as fallbacks |
 | AI — Matching | Embedding cosine-similarity via `amazon.nova-2-multimodal-embeddings-v1:0` (fallback: round-robin) |
 | AI — B-Roll Director | Nova Vision plans per-scene media decisions + validates stock footage relevance |
-| AI — Image Gen | **Nova 2 Omni** (`amazon.nova-omni-v2:0`) generates brand campaign images from product photos |
+| AI — Image Gen | **Nova Canvas** (`amazon.nova-canvas-v1:0`) generates brand campaign images from product photos |
 | Video Render | ffmpeg (local image slideshow → MP4) |
 | Storage (dev) | Local filesystem under `services/backend/data/storage/` |
 | Storage (prod) | AWS S3 + DynamoDB |

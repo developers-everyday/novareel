@@ -289,6 +289,7 @@ class NovaService:
     script_lines: Sequence[str],
     assets: Sequence[AssetRecord],
     image_analysis: list[dict] | None = None,
+    segment_length: float | None = None,
   ) -> list[StoryboardSegment]:
     if not assets:
       raise ValueError('No uploaded assets available for matching')
@@ -302,7 +303,8 @@ class NovaService:
           focal_map[info['asset_id']] = FocalRegion(**fr_data)
 
     total = max(len(script_lines), 1)
-    segment_length = max(4.0, 36.0 / total)
+    if segment_length is None:
+      segment_length = max(4.0, 36.0 / total)
 
     if not self._settings.use_mock_ai:
       try:

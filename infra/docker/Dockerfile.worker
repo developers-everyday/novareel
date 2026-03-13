@@ -1,0 +1,19 @@
+FROM python:3.12-slim AS base
+
+# Install ffmpeg (required for video rendering) and system deps
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy and install Python deps first (layer caching)
+COPY services/backend/pyproject.toml services/backend/setup.py* ./
+COPY services/backend/app ./app/
+RUN pip install --no-cache-dir -e .
+
+# Copy remaining backend files
+COPY services/backend/ ./
+
+# Worker does not expose ports; it polls SQS
+CMD ["python", "worker.py"]

@@ -1,0 +1,149 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  # ── Run existing CI checks first ──────────
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  # ── Build and Push Docker Images ──────────
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      api_image: ${{ steps.meta.outputs.api_image }}
+      worker_image: ${{ steps.meta.outputs.worker_image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image metadata
+        id: meta
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          IMAGE_TAG="${GITHUB_SHA::8}-$(date +%s)"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "api_image=${REGISTRY}/novareel-${ENVIRONMENT}-api:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "worker_image=${REGISTRY}/novareel-${ENVIRONMENT}-worker:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/docker/Dockerfile.api
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.api_image }}
+            ${{ steps.ecr-login.outputs.registry }}/novareel-${{ github.event.inputs.environment || 'production' }}-api:latest
+
+      - name: Build and push Worker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/docker/Dockerfile.worker
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.worker_image }}
+            ${{ steps.ecr-login.outputs.registry }}/novareel-${{ github.event.inputs.environment || 'production' }}-worker:latest
+
+  # ── Deploy to ECS ─────────────────────────
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy CloudFormation stack
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+        run: |
+          aws cloudformation deploy \
+            --template-file infra/cloudformation.yml \
+            --stack-name "novareel-${ENVIRONMENT}" \
+            --region ${{ env.AWS_REGION }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              Environment="${ENVIRONMENT}" \
+              ApiImageUri="${{ needs.build-and-push.outputs.api_image }}" \
+              WorkerImageUri="${{ needs.build-and-push.outputs.worker_image }}" \
+            --no-fail-on-empty-changeset
+
+      - name: Wait for ECS services to stabilize
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+        run: |
+          aws ecs wait services-stable \
+            --cluster "novareel-${ENVIRONMENT}" \
+            --services "novareel-${ENVIRONMENT}-api" "novareel-${ENVIRONMENT}-worker" \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Health check
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+        run: |
+          ALB_URL=$(aws cloudformation describe-stacks \
+            --stack-name "novareel-${ENVIRONMENT}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`ALBURL`].OutputValue' \
+            --output text)
+          echo "Checking ${ALB_URL}/healthz ..."
+          for i in 1 2 3 4 5; do
+            HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${ALB_URL}/healthz" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✔ API is healthy"
+              exit 0
+            fi
+            echo "Attempt ${i}: HTTP ${HTTP_CODE}, retrying in 15s..."
+            sleep 15
+          done
+          echo "⚠ Health check did not pass after 5 attempts"
+          exit 1
+
+      - name: Print stack outputs
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name "novareel-${ENVIRONMENT}" \
+            --query 'Stacks[0].Outputs' --output table

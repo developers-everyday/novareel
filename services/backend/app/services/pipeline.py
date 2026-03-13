@@ -561,6 +561,9 @@ def process_generation_job(
           'storyboard': [s.model_dump() for s in storyboard],
           'review_notes': orch_result.review_notes,
           'summary': orch_result.summary,
+          'audio_duration': orch_result.audio_duration,
+          'audio_key': orch_result.audio_key,
+          'per_scene_duration': orch_result.per_scene_duration,
         }))
         logger.info('Orchestrator complete: %d scenes, %d storyboard segments (%.1fs)',
                      len(script_scenes), len(storyboard), timings.get('orchestrator_sec', 0))
@@ -599,15 +602,58 @@ def process_generation_job(
         storage.store_text(f'{prefix}/script_scenes.json', json.dumps([s.model_dump() for s in script_scenes]))
         timings['scripting_sec'] = round(time.perf_counter() - phase_start, 3)
 
+      # ── EARLY NARRATION (audio-first) ──────────────────────────────
+      # Generate TTS before matching so we know the real audio duration.
+      # The later NARRATION section will skip via storage.exists() check.
+      from app.config import get_settings as _get_settings
+      _settings = _get_settings()
+      _audio_key = f'projects/{project.id}/outputs/{job.id}.mp3'
+      _storage_root = _settings.local_data_dir / _settings.local_storage_dir
+      _audio_path = _storage_root / _audio_key
+      _per_scene_duration: float | None = None
+
+      if not storage.exists(_audio_key):
+        repo.update_job(job.id, status=JobStatus.NARRATION, stage=JobStatus.NARRATION, progress_pct=40, timings=timings)
+        phase_start = time.perf_counter()
+        _transcript = '\n'.join(script_lines)
+        storage.store_text(f'projects/{project.id}/outputs/{job.id}.txt', _transcript)
+
+        if _settings.use_mock_ai:
+          from app.services.voice.base import MOCK_SILENT_MP3
+          storage.store_bytes(_audio_key, MOCK_SILENT_MP3, content_type='audio/mpeg')
+          _ffmpeg = shutil.which('ffmpeg')
+          if _ffmpeg and _audio_path.exists():
+            _mock_dur = max(6.0 * len(script_lines), 36.0)
+            subprocess.run([
+              _ffmpeg, '-y', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono',
+              '-t', str(_mock_dur), '-c:a', 'libmp3lame', '-q:a', '9', str(_audio_path),
+            ], check=False, capture_output=True)
+        else:
+          from app.services.voice.factory import build_voice_provider
+          _provider = build_voice_provider(job.voice_provider, _settings)
+          _audio_payload = _provider.synthesize(_transcript[:3000], voice_gender=job.voice_gender, language=job.language)
+          storage.store_bytes(_audio_key, _audio_payload, content_type='audio/mpeg')
+          if _audio_path.exists() and _audio_path.stat().st_size > 100:
+            from app.services.audio import AudioProcessor
+            AudioProcessor().process(_audio_path, _audio_path, trim_silence=True, normalize=True, speed=1.0)
+
+        timings['narration_sec'] = round(time.perf_counter() - phase_start, 3)
+
+      _audio_dur = _probe_audio_duration(_audio_path)
+      if _audio_dur and _audio_dur > 0:
+        _num = max(len(script_lines), 1)
+        _per_scene_duration = round(_audio_dur / _num, 3)
+        logger.info('Audio-first: %.1fs total, %.2fs per scene (%d scenes)', _audio_dur, _per_scene_duration, _num)
+
       # ── MATCHING ───────────────────────────────────────────────────
       existing_storyboard = storage.load_text(f'{prefix}/storyboard.json')
       if existing_storyboard:
         storyboard = [StoryboardSegment(**s) for s in json.loads(existing_storyboard)]
         logger.info('Resuming: skipped MATCHING (cached)')
       else:
-        repo.update_job(job.id, status=JobStatus.MATCHING, stage=JobStatus.MATCHING, progress_pct=45, timings=timings)
+        repo.update_job(job.id, status=JobStatus.MATCHING, stage=JobStatus.MATCHING, progress_pct=50, timings=timings)
         phase_start = time.perf_counter()
-        storyboard = nova.match_images(script_lines, assets, image_analysis=image_analysis)
+        storyboard = nova.match_images(script_lines, assets, image_analysis=image_analysis, segment_length=_per_scene_duration)
         storage.store_text(f'{prefix}/storyboard.json', json.dumps([s.model_dump() for s in storyboard]))
         timings['matching_sec'] = round(time.perf_counter() - phase_start, 3)
 
@@ -753,7 +799,7 @@ def process_generation_job(
       # all segments are fixed-duration B-roll), extend the last segment.
       final_sb_duration = sum(s.duration_sec for s in storyboard)
       if audio_duration and final_sb_duration < audio_duration - 0.1 and storyboard:
-        gap = round(audio_duration - final_sb_duration + 0.2, 3)
+        gap = round(audio_duration - final_sb_duration + 0.05, 3)
         storyboard[-1].duration_sec = round(storyboard[-1].duration_sec + gap, 3)
         # Recalculate start_sec for the last segment
         if len(storyboard) > 1:

@@ -188,6 +188,7 @@ class StoryboardSegment(BaseModel):
   broll_query: str | None = None
   broll_relevance_score: float | None = None
   is_ai_generated: bool = False
+  ai_image_path: str | None = None
 
 
 class VideoResultRecord(BaseModel):

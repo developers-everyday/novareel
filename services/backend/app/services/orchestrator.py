@@ -10,9 +10,10 @@ Architecture:
     ├─ tool: analyze_images      → NovaService.analyze_images()
     ├─ tool: generate_script     → NovaService.generate_script()
     ├─ tool: review_script       → Nova Pro reviews inline (no external call)
-    ├─ tool: plan_media          → BRollDirector.plan_scenes()
+    ├─ tool: synthesize_audio    → TTS provider → audio duration (AUDIO-FIRST)
+    ├─ tool: plan_media          → Decide per-scene visuals with real durations
     ├─ tool: search_stock_footage→ StockMediaService.search_videos()
-    ├─ tool: generate_ai_image   → ImageGenerator.generate_scene_image()
+    ├─ tool: generate_ai_image   → ImageGenerator.generate_scene_image() (JPG only)
     ├─ tool: match_images        → NovaService.match_images()
     └─ tool: finalize            → Returns artifacts to pipeline
 """
@@ -257,11 +258,35 @@ ORCHESTRATOR_TOOLS = [
     },
     {
         'toolSpec': {
+            'name': 'synthesize_audio',
+            'description': (
+                'Generate the TTS narration audio from the current script. '
+                'Returns the exact audio duration and per-scene duration. '
+                'MUST be called after review_script and BEFORE plan_media, so you '
+                'know the real timing when planning video elements.'
+            ),
+            'inputSchema': {
+                'json': {
+                    'type': 'object',
+                    'properties': {
+                        'reasoning': {
+                            'type': 'string',
+                            'description': 'Why you are synthesizing audio now.',
+                        },
+                    },
+                    'required': ['reasoning'],
+                },
+            },
+        },
+    },
+    {
+        'toolSpec': {
             'name': 'finalize',
             'description': (
                 'Signal that all planning is complete. Call this when: '
                 '(1) images are analyzed, (2) script is generated and reviewed, '
-                '(3) media plan is decided, and (4) any needed AI images are generated. '
+                '(3) audio is synthesized, (4) media plan is decided, and '
+                '(5) any needed AI images are generated. '
                 'Returns the final artifacts to the pipeline.'
             ),
             'inputSchema': {
@@ -294,6 +319,9 @@ class OrchestratorResult:
     review_notes: str = ''
     summary: str = ''
     success: bool = False
+    audio_duration: float = 0.0
+    audio_key: str = ''
+    per_scene_duration: float = 0.0
 
 
 # ── Orchestrator Class ────────────────────────────────────────────────────────
@@ -328,6 +356,10 @@ class PipelineOrchestrator:
         self._generated_images: dict[int, Path] = {}  # scene_index → image path
         self._generated_videos: dict[int, Path] = {}  # scene_index → video path
         self._broll_clips: dict[int, tuple[Path, float]] = {}  # scene_index → (path, duration)
+        # Audio-first state
+        self._audio_duration: float = 0.0
+        self._per_scene_duration: float = 0.0
+        self._audio_key: str = ''
 
     def _get_client(self):
         if self._client is None:
@@ -463,6 +495,9 @@ class PipelineOrchestrator:
         result.storyboard = self._storyboard
         result.media_plan = self._media_plan
         result.review_notes = self._review_notes
+        result.audio_duration = self._audio_duration
+        result.audio_key = self._audio_key
+        result.per_scene_duration = self._per_scene_duration
         result.success = finalized and bool(self._script_scenes)
 
         if not result.success:
@@ -471,8 +506,10 @@ class PipelineOrchestrator:
 
         # Build storyboard from media plan if not already built
         if not self._storyboard and self._script_scenes:
+            seg_len = self._per_scene_duration if self._per_scene_duration > 0 else None
             self._storyboard = self._nova.match_images(
                 self._script_lines, assets, image_analysis=self._image_analysis,
+                segment_length=seg_len,
             )
             result.storyboard = self._storyboard
 
@@ -506,6 +543,9 @@ class PipelineOrchestrator:
 
         if tool_name == 'review_script':
             return self._tool_review_script(tool_input)
+
+        if tool_name == 'synthesize_audio':
+            return self._tool_synthesize_audio(project, job)
 
         if tool_name == 'plan_media':
             return self._tool_plan_media(tool_input, assets)
@@ -596,6 +636,77 @@ class PipelineOrchestrator:
             'review_notes': self._review_notes,
         }
 
+    def _tool_synthesize_audio(
+        self, project: 'ProjectRecord', job: 'GenerationJobRecord',
+    ) -> dict:
+        """Generate TTS narration and return the exact audio duration.
+
+        This is the AUDIO-FIRST step: by knowing the real audio duration
+        before planning media, every downstream element gets the correct
+        per-scene duration from the start.
+        """
+        if not self._script_lines:
+            return {'error': 'No script available. Call generate_script first.'}
+
+        transcript = '\n'.join(self._script_lines)
+        audio_key = f'projects/{project.id}/outputs/{job.id}.mp3'
+
+        storage_root = self._settings.local_data_dir / self._settings.local_storage_dir
+        audio_path = storage_root / audio_key
+
+        # Generate TTS
+        if self._settings.use_mock_ai:
+            from app.services.voice.base import MOCK_SILENT_MP3
+            audio_payload = MOCK_SILENT_MP3
+        else:
+            from app.services.voice.factory import build_voice_provider
+            provider = build_voice_provider(job.voice_provider, self._settings)
+            audio_payload = provider.synthesize(
+                transcript[:3000], voice_gender=job.voice_gender, language=job.language,
+            )
+
+        self._storage.store_bytes(audio_key, audio_payload, content_type='audio/mpeg')
+
+        # If mock AI, generate valid silence via ffmpeg matching a reasonable duration
+        if self._settings.use_mock_ai and audio_path.exists():
+            _ffmpeg = shutil.which('ffmpeg')
+            if _ffmpeg:
+                mock_dur = max(6.0 * len(self._script_lines), 36.0)
+                subprocess.run([
+                    _ffmpeg, '-y', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono',
+                    '-t', str(mock_dur), '-c:a', 'libmp3lame', '-q:a', '9',
+                    str(audio_path),
+                ], check=False, capture_output=True)
+
+        # Audio post-processing (silence trim + normalize)
+        if not self._settings.use_mock_ai and audio_path.exists() and audio_path.stat().st_size > 100:
+            from app.services.audio import AudioProcessor
+            AudioProcessor().process(audio_path, audio_path, trim_silence=True, normalize=True, speed=1.0)
+
+        # Probe the actual audio duration
+        from app.services.pipeline import _probe_audio_duration
+        duration = _probe_audio_duration(audio_path) or 36.0
+
+        num_scenes = max(len(self._script_lines), 1)
+        per_scene = round(duration / num_scenes, 3)
+
+        self._audio_duration = duration
+        self._per_scene_duration = per_scene
+        self._audio_key = audio_key
+
+        # Also store transcript
+        transcript_key = f'projects/{project.id}/outputs/{job.id}.txt'
+        self._storage.store_text(transcript_key, transcript)
+
+        logger.info('Audio synthesized: %.1fs total, %.2fs per scene (%d scenes)',
+                     duration, per_scene, num_scenes)
+
+        return {
+            'audio_duration': round(duration, 2),
+            'per_scene_duration': round(per_scene, 2),
+            'num_scenes': num_scenes,
+        }
+
     def _tool_plan_media(self, tool_input: dict, assets: list['AssetRecord']) -> dict:
         """Store the media plan decided by Nova Pro."""
         decisions = tool_input.get('scene_decisions', [])
@@ -668,7 +779,13 @@ class PipelineOrchestrator:
         clips_dir: Path,
         aspect_ratio: str,
     ) -> dict:
-        """Generate an AI image via Nova Canvas and convert to video segment."""
+        """Generate an AI image via Nova Canvas (JPG only — no pre-rendered video).
+
+        The video renderer (video.py) handles converting images to video
+        segments at the correct duration via zoompan.  Pre-rendering to .mp4
+        here caused duration mismatches because the orchestrator didn't know
+        the final per-scene duration at generation time.
+        """
         from app.services.image_generator import ImageGenerator
         from app.services.video import VideoService
 
@@ -677,7 +794,6 @@ class PipelineOrchestrator:
 
         clips_dir.mkdir(parents=True, exist_ok=True)
         gen_image_path = clips_dir / f'ai_gen_{scene_index:03d}.jpg'
-        clip_path = clips_dir / f'ai_gen_{scene_index:03d}.mp4'
 
         # Resolve best product image as reference
         product_img_path = None
@@ -700,31 +816,16 @@ class PipelineOrchestrator:
         if not generated:
             return {'success': False, 'scene_index': scene_index, 'reason': 'Image generation failed'}
 
-        # Convert to video segment with Ken Burns
-        seg_duration = 6.0  # default per-scene duration
-        if self._storyboard and scene_index < len(self._storyboard):
-            seg_duration = self._storyboard[scene_index].duration_sec
-
-        video_seg = img_gen.generate_scene_video_from_image(
-            image_path=gen_image_path,
-            duration_sec=seg_duration,
-            output_path=clip_path,
-            aspect_ratio=aspect_ratio,
-        )
-
-        if video_seg:
-            self._generated_images[scene_index] = gen_image_path
-            self._generated_videos[scene_index] = clip_path
-            logger.info('Orchestrator: AI image → video for scene %d (prompt: %s)',
-                        scene_index, prompt[:60])
-            return {
-                'success': True,
-                'scene_index': scene_index,
-                'image_path': str(gen_image_path),
-                'video_path': str(clip_path),
-            }
-
-        return {'success': False, 'scene_index': scene_index, 'reason': 'Video conversion failed'}
+        # Store the generated image path — video rendering happens later
+        # in video.py which will render via zoompan at the correct duration.
+        self._generated_images[scene_index] = gen_image_path
+        logger.info('Orchestrator: AI image generated for scene %d (prompt: %s)',
+                    scene_index, prompt[:60])
+        return {
+            'success': True,
+            'scene_index': scene_index,
+            'image_path': str(gen_image_path),
+        }
 
     def _tool_finalize(self, tool_input: dict) -> dict:
         """Signal completion."""
@@ -741,7 +842,16 @@ class PipelineOrchestrator:
         clips_dir: Path,
         aspect_ratio: str,
     ) -> None:
-        """Apply generated images and B-roll clips to the storyboard."""
+        """Apply generated images and B-roll clips to the storyboard.
+
+        AI-generated images are stored as image paths on the segment
+        (media_type stays 'image', ai_image_path holds the JPG).
+        The video renderer (video.py) handles converting them to zoompan
+        video at the correct duration.
+
+        B-roll clips are stored as video paths with their actual clip
+        duration capped to the per-scene duration.
+        """
         from app.models import StoryboardSegment
 
         for decision in self._media_plan:
@@ -753,16 +863,16 @@ class PipelineOrchestrator:
 
             seg = self._storyboard[idx]
 
-            if media_type == 'ai_generated' and idx in self._generated_videos:
-                video_path = self._generated_videos[idx]
+            if media_type == 'ai_generated' and idx in self._generated_images:
+                img_path = self._generated_images[idx]
                 self._storyboard[idx] = StoryboardSegment(
                     order=seg.order,
                     script_line=seg.script_line,
                     image_asset_id=seg.image_asset_id,
                     start_sec=seg.start_sec,
                     duration_sec=seg.duration_sec,
-                    media_type='video',
-                    video_path=str(video_path),
+                    media_type='image',
+                    ai_image_path=str(img_path),
                     focal_region=seg.focal_region,
                     is_ai_generated=True,
                 )
@@ -811,7 +921,9 @@ class PipelineOrchestrator:
             '2. Call generate_script to create a 6-scene narration script.\n'
             '3. Call review_script to check quality — fix any weak scenes inline.\n'
             '   If the script needs major changes, call generate_script again (max 1 retry).\n'
-            '4. Call plan_media to decide per-scene visuals:\n'
+            '4. Call synthesize_audio to generate the TTS narration. This returns the\n'
+            '   exact audio duration and per-scene duration — use these when planning media.\n'
+            '5. Call plan_media to decide per-scene visuals:\n'
             f'   - You have {len(assets)} uploaded image(s).\n'
             + (
                 '   - With only 1-2 images, you MUST use ai_generated for at least 3 scenes.\n'
@@ -822,14 +934,15 @@ class PipelineOrchestrator:
                 '   - With 3+ images, prioritize product images. Use ai_generated or broll\n'
                 '     for 1-2 scenes to add variety.\n'
             ) +
-            '5. For scenes marked broll: call search_stock_footage.\n'
+            '6. For scenes marked broll: call search_stock_footage.\n'
             '   If Pexels returns nothing, call generate_ai_image as fallback.\n'
-            '6. For scenes marked ai_generated: call generate_ai_image with a detailed prompt\n'
+            '7. For scenes marked ai_generated: call generate_ai_image with a detailed prompt\n'
             '   describing the product in a lifestyle context (lighting, setting, composition).\n'
-            '7. Call finalize when everything is ready.\n\n'
+            '8. Call finalize when everything is ready.\n\n'
             'RULES:\n'
             '- Always call analyze_images first.\n'
-            '- Always review the script before planning media.\n'
+            '- Always call synthesize_audio BEFORE plan_media — you need the real durations.\n'
+            '- Always review the script before synthesizing audio.\n'
             '- Never skip the finalize step.\n'
             '- Keep reasoning concise — focus on decisions, not long explanations.\n'
         )

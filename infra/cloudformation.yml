@@ -1,0 +1,947 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: NovaReel — Full AWS infrastructure (ECS Fargate, DynamoDB, S3, SQS, CloudFront, ALB)
+
+# ─────────────────────────────────────────────
+# Parameters
+# ─────────────────────────────────────────────
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [production, staging]
+
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+
+  ApiImageUri:
+    Type: String
+    Description: ECR image URI for the API service
+    Default: ''
+
+  WorkerImageUri:
+    Type: String
+    Description: ECR image URI for the Worker service
+    Default: ''
+
+  ApiDesiredCount:
+    Type: Number
+    Default: 1
+
+  WorkerDesiredCount:
+    Type: Number
+    Default: 1
+
+  ApiCpu:
+    Type: Number
+    Default: 512
+    AllowedValues: [256, 512, 1024, 2048]
+
+  ApiMemory:
+    Type: Number
+    Default: 1024
+    AllowedValues: [512, 1024, 2048, 4096]
+
+  WorkerCpu:
+    Type: Number
+    Default: 1024
+    AllowedValues: [512, 1024, 2048, 4096]
+
+  WorkerMemory:
+    Type: Number
+    Default: 4096
+    AllowedValues: [2048, 4096, 8192]
+
+  ClerkSecretKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+
+  ClerkPublishableKey:
+    Type: String
+    Default: ''
+
+  PexelsApiKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+
+  ElevenlabsApiKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+
+  DomainName:
+    Type: String
+    Default: ''
+    Description: Custom domain (optional). Leave blank to use ALB DNS.
+
+  CorsOrigin:
+    Type: String
+    Default: '*'
+    Description: Allowed CORS origin for the API
+
+# ─────────────────────────────────────────────
+# Conditions
+# ─────────────────────────────────────────────
+Conditions:
+  HasApiImage: !Not [!Equals [!Ref ApiImageUri, '']]
+  HasWorkerImage: !Not [!Equals [!Ref WorkerImageUri, '']]
+
+# ─────────────────────────────────────────────
+# Resources
+# ─────────────────────────────────────────────
+Resources:
+
+  # ── VPC & Networking ──────────────────────
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub novareel-${Environment}-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub novareel-${Environment}-public-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub novareel-${Environment}-public-2
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub novareel-${Environment}-private-1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub novareel-${Environment}-private-2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # NAT Gateway for private subnets (outbound internet for Fargate tasks)
+  NatEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  # ── Security Groups ──────────────────────
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP/HTTPS to ALB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic from ALB to ECS tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+  # ── ALB ──────────────────────────────────
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub novareel-${Environment}-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub novareel-${Environment}-api-tg
+      Port: 8000
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: ip
+      HealthCheckPath: /healthz
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckTimeoutSeconds: 5
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  # ── ECR Repositories ─────────────────────
+  ApiECRRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub novareel-${Environment}-api
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  WorkerECRRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub novareel-${Environment}-worker
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  # ── ECS Cluster ──────────────────────────
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub novareel-${Environment}
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  # ── IAM Roles ────────────────────────────
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub novareel-${Environment}-ecs-exec-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SecretsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref AppSecret
+
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub novareel-${Environment}-ecs-task-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: NovaReelTaskPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # DynamoDB
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt ProjectsTable.Arn
+                  - !GetAtt JobsTable.Arn
+                  - !GetAtt ResultsTable.Arn
+                  - !GetAtt UsageTable.Arn
+                  - !GetAtt AnalyticsTable.Arn
+                  - !Sub ${ProjectsTable.Arn}/index/*
+                  - !Sub ${JobsTable.Arn}/index/*
+              # S3
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt AssetBucket.Arn
+                  - !Sub ${AssetBucket.Arn}/*
+              # SQS
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt JobQueue.Arn
+              # Bedrock
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: '*'
+              # Polly (TTS fallback)
+              - Effect: Allow
+                Action:
+                  - polly:SynthesizeSpeech
+                Resource: '*'
+              # Transcribe (caption generation)
+              - Effect: Allow
+                Action:
+                  - transcribe:StartTranscriptionJob
+                  - transcribe:GetTranscriptionJob
+                Resource: '*'
+
+  # ── Secrets Manager ──────────────────────
+  AppSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub novareel-${Environment}-secrets
+      Description: NovaReel application secrets
+      SecretString: !Sub |
+        {
+          "CLERK_SECRET_KEY": "${ClerkSecretKey}",
+          "NOVAREEL_PEXELS_API_KEY": "${PexelsApiKey}",
+          "NOVAREEL_ELEVENLABS_API_KEY": "${ElevenlabsApiKey}"
+        }
+
+  # ── CloudWatch Log Groups ────────────────
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /novareel/${Environment}/api
+      RetentionInDays: 30
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /novareel/${Environment}/worker
+      RetentionInDays: 30
+
+  # ── ECS Task Definitions ─────────────────
+  ApiTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Condition: HasApiImage
+    Properties:
+      Family: !Sub novareel-${Environment}-api
+      Cpu: !Ref ApiCpu
+      Memory: !Ref ApiMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: api
+          Image: !Ref ApiImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8000
+              Protocol: tcp
+          Environment:
+            - Name: NOVAREEL_ENV
+              Value: !Ref Environment
+            - Name: NOVAREEL_AUTH_DISABLED
+              Value: 'false'
+            - Name: NOVAREEL_USE_MOCK_AI
+              Value: 'false'
+            - Name: NOVAREEL_STORAGE_BACKEND
+              Value: dynamodb
+            - Name: NOVAREEL_QUEUE_BACKEND
+              Value: sqs
+            - Name: NOVAREEL_AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: NOVAREEL_S3_BUCKET_NAME
+              Value: !Ref AssetBucket
+            - Name: NOVAREEL_DYNAMODB_PROJECTS_TABLE
+              Value: !Ref ProjectsTable
+            - Name: NOVAREEL_DYNAMODB_JOBS_TABLE
+              Value: !Ref JobsTable
+            - Name: NOVAREEL_DYNAMODB_RESULTS_TABLE
+              Value: !Ref ResultsTable
+            - Name: NOVAREEL_DYNAMODB_USAGE_TABLE
+              Value: !Ref UsageTable
+            - Name: NOVAREEL_DYNAMODB_ANALYTICS_TABLE
+              Value: !Ref AnalyticsTable
+            - Name: NOVAREEL_SQS_QUEUE_URL
+              Value: !Ref JobQueue
+            - Name: NOVAREEL_CDN_BASE_URL
+              Value: !Sub https://${CloudFrontDistribution.DomainName}
+            - Name: NOVAREEL_PUBLIC_API_BASE_URL
+              Value: !Sub http://${ALB.DNSName}
+            - Name: NOVAREEL_CORS_ORIGINS
+              Value: !Sub '["${CorsOrigin}"]'
+            - Name: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+              Value: !Ref ClerkPublishableKey
+          Secrets:
+            - Name: CLERK_SECRET_KEY
+              ValueFrom: !Sub ${AppSecret}:CLERK_SECRET_KEY::
+            - Name: NOVAREEL_PEXELS_API_KEY
+              ValueFrom: !Sub ${AppSecret}:NOVAREEL_PEXELS_API_KEY::
+            - Name: NOVAREEL_ELEVENLABS_API_KEY
+              ValueFrom: !Sub ${AppSecret}:NOVAREEL_ELEVENLABS_API_KEY::
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ApiLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: api
+
+  WorkerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Condition: HasWorkerImage
+    Properties:
+      Family: !Sub novareel-${Environment}-worker
+      Cpu: !Ref WorkerCpu
+      Memory: !Ref WorkerMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: worker
+          Image: !Ref WorkerImageUri
+          Essential: true
+          Environment:
+            - Name: NOVAREEL_ENV
+              Value: !Ref Environment
+            - Name: NOVAREEL_AUTH_DISABLED
+              Value: 'false'
+            - Name: NOVAREEL_USE_MOCK_AI
+              Value: 'false'
+            - Name: NOVAREEL_STORAGE_BACKEND
+              Value: dynamodb
+            - Name: NOVAREEL_QUEUE_BACKEND
+              Value: sqs
+            - Name: NOVAREEL_AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: NOVAREEL_S3_BUCKET_NAME
+              Value: !Ref AssetBucket
+            - Name: NOVAREEL_DYNAMODB_PROJECTS_TABLE
+              Value: !Ref ProjectsTable
+            - Name: NOVAREEL_DYNAMODB_JOBS_TABLE
+              Value: !Ref JobsTable
+            - Name: NOVAREEL_DYNAMODB_RESULTS_TABLE
+              Value: !Ref ResultsTable
+            - Name: NOVAREEL_DYNAMODB_USAGE_TABLE
+              Value: !Ref UsageTable
+            - Name: NOVAREEL_DYNAMODB_ANALYTICS_TABLE
+              Value: !Ref AnalyticsTable
+            - Name: NOVAREEL_SQS_QUEUE_URL
+              Value: !Ref JobQueue
+            - Name: NOVAREEL_CDN_BASE_URL
+              Value: !Sub https://${CloudFrontDistribution.DomainName}
+            - Name: NOVAREEL_PUBLIC_API_BASE_URL
+              Value: !Sub http://${ALB.DNSName}
+            - Name: NOVAREEL_FFMPEG_PRESET
+              Value: medium
+          Secrets:
+            - Name: NOVAREEL_PEXELS_API_KEY
+              ValueFrom: !Sub ${AppSecret}:NOVAREEL_PEXELS_API_KEY::
+            - Name: NOVAREEL_ELEVENLABS_API_KEY
+              ValueFrom: !Sub ${AppSecret}:NOVAREEL_ELEVENLABS_API_KEY::
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref WorkerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: worker
+
+  # ── ECS Services ─────────────────────────
+  ApiService:
+    Type: AWS::ECS::Service
+    Condition: HasApiImage
+    DependsOn: ALBListener
+    Properties:
+      ServiceName: !Sub novareel-${Environment}-api
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref ApiTaskDefinition
+      DesiredCount: !Ref ApiDesiredCount
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      LoadBalancers:
+        - TargetGroupArn: !Ref ALBTargetGroup
+          ContainerName: api
+          ContainerPort: 8000
+
+  WorkerService:
+    Type: AWS::ECS::Service
+    Condition: HasWorkerImage
+    Properties:
+      ServiceName: !Sub novareel-${Environment}-worker
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref WorkerTaskDefinition
+      DesiredCount: !Ref WorkerDesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+
+  # ── Auto Scaling ─────────────────────────
+  ApiScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Condition: HasApiImage
+    Properties:
+      MaxCapacity: 4
+      MinCapacity: 1
+      ResourceId: !Sub service/${ECSCluster}/${ApiService.Name}
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+
+  ApiScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Condition: HasApiImage
+    Properties:
+      PolicyName: !Sub novareel-${Environment}-api-cpu-scaling
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ApiScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 70.0
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  WorkerScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Condition: HasWorkerImage
+    Properties:
+      MaxCapacity: 8
+      MinCapacity: 1
+      ResourceId: !Sub service/${ECSCluster}/${WorkerService.Name}
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+
+  WorkerScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Condition: HasWorkerImage
+    Properties:
+      PolicyName: !Sub novareel-${Environment}-worker-sqs-scaling
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref WorkerScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        CustomizedMetricSpecification:
+          MetricName: ApproximateNumberOfMessagesVisible
+          Namespace: AWS/SQS
+          Dimensions:
+            - Name: QueueName
+              Value: !GetAtt JobQueue.QueueName
+          Statistic: Average
+        TargetValue: 5.0
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  # ── DynamoDB Tables ──────────────────────
+  ProjectsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub novareel-${Environment}-projects
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: owner_id
+          AttributeType: S
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: owner_id
+          KeyType: HASH
+        - AttributeName: id
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  JobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub novareel-${Environment}-jobs
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: project_id
+          AttributeType: S
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: project_id
+          KeyType: HASH
+        - AttributeName: id
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: status-index
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  ResultsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub novareel-${Environment}-results
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: job_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: job_id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  UsageTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub novareel-${Environment}-usage
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: owner_id
+          AttributeType: S
+        - AttributeName: period
+          AttributeType: S
+      KeySchema:
+        - AttributeName: owner_id
+          KeyType: HASH
+        - AttributeName: period
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  AnalyticsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub novareel-${Environment}-analytics
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: owner_id
+          AttributeType: S
+        - AttributeName: timestamp_event
+          AttributeType: S
+      KeySchema:
+        - AttributeName: owner_id
+          KeyType: HASH
+        - AttributeName: timestamp_event
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # ── S3 Bucket ────────────────────────────
+  AssetBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub novareel-${Environment}-assets-${AWS::AccountId}
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionToIA
+            Status: Enabled
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 90
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, PUT, POST]
+            AllowedOrigins: ['*']
+            MaxAge: 3600
+
+  AssetBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AssetBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${AssetBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}
+
+  # ── CloudFront ───────────────────────────
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub novareel-${Environment}-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+          AllowedMethods: [GET, HEAD]
+          Compress: true
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt AssetBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+            OriginAccessControlId: !Ref CloudFrontOAC
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Comment: !Sub NovaReel ${Environment} asset CDN
+
+  # ── SQS ──────────────────────────────────
+  JobDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub novareel-${Environment}-jobs-dlq
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  JobQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub novareel-${Environment}-jobs
+      VisibilityTimeout: 900  # 15 min (video generation is slow)
+      MessageRetentionPeriod: 86400  # 1 day
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt JobDLQ.Arn
+        maxReceiveCount: 3
+
+  # ── CloudWatch Alarms ────────────────────
+  DLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub novareel-${Environment}-dlq-messages
+      AlarmDescription: Messages in dead-letter queue
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt JobDLQ.QueueName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+
+  QueueDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub novareel-${Environment}-queue-depth
+      AlarmDescription: Job queue backing up
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt JobQueue.QueueName
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 50
+      ComparisonOperator: GreaterThanThreshold
+
+# ─────────────────────────────────────────────
+# Outputs
+# ─────────────────────────────────────────────
+Outputs:
+  ALBURL:
+    Description: API load balancer URL
+    Value: !Sub http://${ALB.DNSName}
+
+  CloudFrontURL:
+    Description: CDN URL for assets
+    Value: !Sub https://${CloudFrontDistribution.DomainName}
+
+  ApiECRRepoUri:
+    Description: ECR repository for API image
+    Value: !GetAtt ApiECRRepo.RepositoryUri
+
+  WorkerECRRepoUri:
+    Description: ECR repository for Worker image
+    Value: !GetAtt WorkerECRRepo.RepositoryUri
+
+  S3BucketName:
+    Description: S3 bucket for assets
+    Value: !Ref AssetBucket
+
+  SQSQueueURL:
+    Description: SQS queue URL for jobs
+    Value: !Ref JobQueue
+
+  ProjectsTableName:
+    Value: !Ref ProjectsTable
+  JobsTableName:
+    Value: !Ref JobsTable
+  ResultsTableName:
+    Value: !Ref ResultsTable
+  UsageTableName:
+    Value: !Ref UsageTable
+  AnalyticsTableName:
+    Value: !Ref AnalyticsTable
+
+  ECSClusterName:
+    Value: !Ref ECSCluster

@@ -122,11 +122,31 @@ class VideoService:
       seg_paths: list[Path] = []
       seg_durations: list[float] = []
 
-      # Classify segments into B-roll (sequential) and image (parallel-eligible)
+      # Classify segments into B-roll (sequential) and image (parallel-eligible).
+      # AI-generated segments with ai_image_path go to the image path directly.
+      # Legacy AI segments (video_path only) fall back to .jpg detection.
       image_segments: list[tuple[int, StoryboardSegment]] = []
       broll_segments: list[tuple[int, StoryboardSegment]] = []
+      ai_source_images: dict[int, Path] = {}  # idx → source JPG for AI-generated segments
       for idx, segment in enumerate(storyboard):
+        # AI-generated segments with explicit ai_image_path → image rendering
+        if segment.is_ai_generated and segment.ai_image_path:
+          ai_img = Path(segment.ai_image_path).resolve()
+          if ai_img.exists():
+            ai_source_images[idx] = ai_img
+            image_segments.append((idx, segment))
+            logger.info('Segment %d: AI image → zoompan (duration=%.1fs)', idx, segment.duration_sec)
+            continue
+
         if segment.media_type == 'video' and segment.video_path:
+          # Legacy fallback: AI-generated video with .jpg sibling
+          if segment.is_ai_generated:
+            ai_source_img = Path(segment.video_path).with_suffix('.jpg').resolve()
+            if ai_source_img.exists():
+              ai_source_images[idx] = ai_source_img
+              image_segments.append((idx, segment))
+              logger.info('Segment %d: AI video → zoompan from .jpg (duration=%.1fs)', idx, segment.duration_sec)
+              continue
           broll_segments.append((idx, segment))
         else:
           image_segments.append((idx, segment))
@@ -135,6 +155,7 @@ class VideoService:
       rendered: dict[int, tuple[Path, float]] = {}
 
       # ── Phase 1: Render B-roll segments sequentially ──────────────────
+      ffprobe_path = shutil.which('ffprobe')
       for idx, segment in broll_segments:
         seg_video = temp_root / f'seg_{idx:03d}.mp4'
         seg_duration = segment.duration_sec
@@ -172,6 +193,28 @@ class VideoService:
             image_segments.append((idx, segment.model_copy(update={'media_type': 'image', 'video_path': None})))
             image_segments.sort(key=lambda x: x[0])
           else:
+            # Probe actual rendered duration — B-roll source may be shorter
+            actual_dur = _probe_duration(ffprobe_path, seg_video)
+            if actual_dur and actual_dur < seg_duration - 0.2:
+              # Pad this individual segment with its last frame
+              padded_seg = temp_root / f'seg_{idx:03d}_padded.mp4'
+              pad_gap = seg_duration - actual_dur + 0.1
+              pad_cmd = [
+                ffmpeg_path, '-y', '-i', str(seg_video),
+                '-vf', f'tpad=stop_mode=clone:stop_duration={pad_gap:.2f}',
+                '-c:v', 'libx264', '-preset', self._settings.ffmpeg_preset,
+                '-pix_fmt', 'yuv420p',
+                str(padded_seg),
+              ]
+              pad_result = subprocess.run(pad_cmd, check=False, capture_output=True)
+              if pad_result.returncode == 0 and padded_seg.exists():
+                seg_video = padded_seg
+                logger.info('B-roll segment %d padded: %.1fs → %.1fs', idx, actual_dur, seg_duration)
+              else:
+                # Use actual duration if padding fails
+                seg_duration = actual_dur
+                logger.warning('B-roll segment %d shorter than target (%.1fs vs %.1fs), padding failed',
+                               idx, actual_dur, segment.duration_sec)
             rendered[idx] = (seg_video, seg_duration)
 
       # ── Phase 2: Render image segments (parallel when ≥ 3) ───────────
@@ -181,7 +224,10 @@ class VideoService:
         parallel_tasks: list[SegmentRenderTask] = []
         for idx, segment in image_segments:
           seg_video = temp_root / f'seg_{idx:03d}.mp4'
-          asset_path = self._resolve_asset_path(segment.image_asset_id, project.id)
+          # Use AI source image if available, otherwise resolve from project assets
+          asset_path = ai_source_images.get(idx)
+          if asset_path is None:
+            asset_path = self._resolve_asset_path(segment.image_asset_id, project.id)
           if asset_path and asset_path.exists():
             focal = segment.focal_region
             parallel_tasks.append(SegmentRenderTask(
@@ -217,7 +263,10 @@ class VideoService:
           fps = 24
           total_frames = int(fps * seg_duration)
 
-          asset_path = self._resolve_asset_path(segment.image_asset_id, project.id)
+          # Use AI source image if available, otherwise resolve from project assets
+          asset_path = ai_source_images.get(idx)
+          if asset_path is None:
+            asset_path = self._resolve_asset_path(segment.image_asset_id, project.id)
           if asset_path and asset_path.exists():
             from app.services.zoom_utils import build_zoompan_vf
 
@@ -227,10 +276,10 @@ class VideoService:
               duration_sec=seg_duration,
               fps=fps,
               zoom_dir='zoom_in' if idx % 2 == 0 else 'zoom_out',
-              zoom_speed=0.0015,
-              max_zoom=1.3,
+              max_zoom=1.5,
               pan_x=focal.cx if focal else 0.5,
               pan_y=focal.cy if focal else 0.5,
+              adaptive=True,
             )
 
             if has_drawtext and segment.script_line and not ass_subtitle_path:
@@ -410,9 +459,13 @@ class VideoService:
         video_dur = _probe_duration(ffprobe_path, joined_video)
 
         if audio_dur and video_dur and audio_dur > video_dur + 0.1:
-          # Extend video with last-frame padding so it matches audio length
+          # Last-resort fallback: extend video with last-frame padding.
+          # Normally individual segments are already padded/re-rendered to
+          # the correct duration, so this should rarely trigger.
           padded = temp_root / 'padded.mp4'
-          pad_dur = audio_dur - video_dur + 0.5  # small buffer
+          pad_dur = audio_dur - video_dur + 0.1  # small buffer
+          logger.warning('Whole-video pad needed: video=%.1fs < audio=%.1fs (deficit=%.1fs)',
+                         video_dur, audio_dur, audio_dur - video_dur)
           pad_cmd = [
             ffmpeg_path, '-y',
             '-i', str(joined_video),
@@ -429,11 +482,30 @@ class VideoService:
           else:
             logger.warning('Video padding failed, muxing as-is (narration may extend past video)')
 
+        # Pad audio with silence to match video duration so browsers don't
+        # stop playback when the shorter audio stream ends.
+        padded_audio = audio_path
+        if audio_dur and video_dur and video_dur > audio_dur + 0.05:
+          padded_audio_path = temp_root / 'audio_padded.mp3'
+          pad_silence = video_dur - audio_dur + 0.1
+          apad_cmd = [
+            ffmpeg_path, '-y',
+            '-i', str(audio_path),
+            '-af', f'apad=pad_dur={pad_silence:.2f}',
+            '-c:a', 'libmp3lame', '-q:a', '2',
+            str(padded_audio_path),
+          ]
+          apad_result = subprocess.run(apad_cmd, check=False, capture_output=True)
+          if apad_result.returncode == 0 and padded_audio_path.exists():
+            padded_audio = padded_audio_path
+            logger.info('Padded audio with %.1fs silence to match video', pad_silence)
+
         mux_cmd = [
           ffmpeg_path, '-y',
           '-i', str(joined_video),
-          '-i', str(audio_path),
+          '-i', str(padded_audio),
           '-c:v', 'copy', '-c:a', 'aac',
+          '-movflags', '+faststart',
           str(muxed),
         ]
         result = subprocess.run(mux_cmd, check=False, capture_output=True)
@@ -462,6 +534,7 @@ class VideoService:
             '-filter_complex',
             '[1:a]volume=0.18[bg];[0:a][bg]amix=inputs=2:duration=first:normalize=0:dropout_transition=0',
             '-c:v', 'copy', '-c:a', 'aac',
+            '-movflags', '+faststart',
             str(music_muxed),
           ]
         else:
@@ -474,6 +547,7 @@ class VideoService:
             '[1:a]volume=0.25[bg]',
             '-map', '0:v', '-map', '[bg]',
             '-c:v', 'copy', '-c:a', 'aac', '-shortest',
+            '-movflags', '+faststart',
             str(music_muxed),
           ]
 

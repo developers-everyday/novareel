@@ -82,12 +82,12 @@ def _render_single_segment(task_dict: dict[str, Any]) -> dict[str, Any]:
       vf = build_zoompan_vf(
         width=width, height=height,
         duration_sec=duration,
-        fps=25,
+        fps=24,
         zoom_dir='zoom_in' if segment_index % 2 == 0 else 'zoom_out',
-        zoom_speed=0.001,
-        max_zoom=1.2,
+        max_zoom=1.5,
         pan_x=pan_x,
         pan_y=pan_y,
+        adaptive=True,
       )
     else:
       vf = f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2'
@@ -102,7 +102,7 @@ def _render_single_segment(task_dict: dict[str, Any]) -> dict[str, Any]:
       '-preset', ffmpeg_preset,
       '-tune', 'stillimage',
       '-pix_fmt', 'yuv420p',
-      '-r', '25',
+      '-r', '24',
       output_path,
     ]
 

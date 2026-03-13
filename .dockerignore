@@ -1,0 +1,29 @@
+# Git
+.git
+.github
+
+# Node / Frontend (not needed in backend images)
+node_modules
+apps/web/.next
+apps/web/node_modules
+
+# Python caches
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+*.egg-info
+
+# Local data & env
+.env
+.env.*
+services/backend/data/storage/
+services/backend/data/*.json
+services/backend/data/*.jsonl
+
+# Docs & misc
+docs/
+*.md
+*.docx
+.DS_Store
+.editorconfig

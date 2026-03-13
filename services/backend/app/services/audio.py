@@ -168,10 +168,10 @@ class AudioProcessor:
     """Remove leading and trailing silence using silenceremove filter."""
     af = (
       f'silenceremove=start_periods=1:start_threshold={threshold_db}dB'
-      f':start_duration={min_duration}'
+      f':start_duration=0.02'
       f',areverse'
       f',silenceremove=start_periods=1:start_threshold={threshold_db}dB'
-      f':start_duration={min_duration}'
+      f':start_duration=0.02'
       f',areverse'
     )
     return self._run_ffmpeg_af(input_path, output_path, af)
