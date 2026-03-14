@@ -9,6 +9,16 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? (process.env.NODE_E
 
 type JsonObject = Record<string, unknown>;
 
+function isApiAssetUploadUrl(uploadUrl: string): boolean {
+  try {
+    const base = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+    const { pathname } = new URL(uploadUrl, base);
+    return /^\/v1\/projects\/[^/]+\/assets\/[^/]+:upload$/.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
 async function apiRequest<T>(path: string, options: RequestInit = {}, token?: string | null): Promise<T> {
   const headers = new Headers(options.headers);
 
@@ -69,7 +79,10 @@ export async function getUploadUrl(
 
 export async function uploadAsset(uploadUrl: string, file: File, headers: Record<string, string>, token?: string | null): Promise<void> {
   const mergedHeaders: Record<string, string> = { ...headers };
-  if (token) {
+
+  // Local/dev uploads go back through the API and require auth, but presigned S3 PUTs must not
+  // include the Clerk bearer token or the signature validation will fail.
+  if (token && isApiAssetUploadUrl(uploadUrl)) {
     mergedHeaders['Authorization'] = `Bearer ${token}`;
   }
 
