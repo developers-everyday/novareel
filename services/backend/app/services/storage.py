@@ -129,9 +129,15 @@ class S3StorageService(StorageService):
     self._client = boto3.client('s3', region_name=settings.aws_region)
 
   def create_upload_url(self, asset: AssetRecord) -> AssetUploadUrlResponse:
-    upload_url = (
-      f"{self._settings.public_api_base_url.rstrip('/')}"
-      f"/v1/projects/{asset.project_id}/assets/{asset.id}:upload"
+    upload_url = self._client.generate_presigned_url(
+      'put_object',
+      Params={
+        'Bucket': self._bucket,
+        'Key': asset.object_key,
+        'ContentType': asset.content_type,
+      },
+      ExpiresIn=3600,
+      HttpMethod='PUT',
     )
 
     return AssetUploadUrlResponse(

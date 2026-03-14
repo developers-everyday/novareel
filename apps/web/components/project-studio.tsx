@@ -2,7 +2,7 @@
 
 import { useAuth } from '@clerk/nextjs';
 import Image from 'next/image';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   createProject,
   generateProject,
@@ -87,6 +87,7 @@ export function ProjectStudio() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [result, setResult] = useState<VideoResult | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
 
   const [csatRating, setCsatRating] = useState('5');
   const [csatComment, setCsatComment] = useState('');
@@ -122,11 +123,25 @@ export function ProjectStudio() {
     };
   }, [filePreviews]);
 
-  async function refreshSideData(targetProjectId?: string) {
-    const token = await getToken();
+  const getRequiredToken = useCallback(async (): Promise<string> => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const token = await getToken();
+      if (token) {
+        return token;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    throw new Error('Authentication token unavailable. Refresh the page and sign in again.');
+  }, [getToken]);
+
+  const refreshSideData = useCallback(async (targetProjectId?: string) => {
+    const token = await getRequiredToken();
     const [usageSummary, projectItems] = await Promise.all([getUsage(token), listProjects(token)]);
 
     setUsage(usageSummary);
+    setUsageError(null);
     setProjects(projectItems);
 
     const nextProjectId = targetProjectId ?? projectId;
@@ -134,15 +149,17 @@ export function ProjectStudio() {
       const jobs = await listProjectJobs(nextProjectId, token);
       setProjectJobs(jobs);
     }
-  }
+  }, [getRequiredToken, projectId]);
 
   useEffect(() => {
     if (!isLoaded || !userId) {
       return;
     }
 
-    refreshSideData().catch(() => undefined);
-  }, [isLoaded, userId]);
+    refreshSideData().catch((err) => {
+      setUsageError(err instanceof Error ? err.message : 'Failed to load usage');
+    });
+  }, [isLoaded, refreshSideData, userId]);
 
   useEffect(() => {
     let interval: NodeJS.Timeout | undefined;
@@ -152,7 +169,7 @@ export function ProjectStudio() {
         return;
       }
 
-      const token = await getToken();
+      const token = await getRequiredToken();
       const nextJob = await getJob(job.id, token);
       setJob(nextJob);
 
@@ -191,7 +208,7 @@ export function ProjectStudio() {
         clearInterval(interval);
       }
     };
-  }, [job, projectId, getToken]);
+  }, [getRequiredToken, job, projectId]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -209,7 +226,7 @@ export function ProjectStudio() {
         throw new Error('Add at least one product image.');
       }
 
-      const token = await getToken();
+      const token = await getRequiredToken();
 
       const project = await createProject(
         {
@@ -239,7 +256,7 @@ export function ProjectStudio() {
           token
         );
 
-        await uploadAsset(`/v1/projects/${project.id}/assets/${upload.asset_id}:upload`, file, upload.headers, token);
+        await uploadAsset(upload.upload_url, file, upload.headers, token);
       }
 
       const idempotencyKey =
@@ -738,6 +755,8 @@ export function ProjectStudio() {
               <p>Quota limit: {usage.quota_limit}</p>
               <p>Remaining: {usage.remaining}</p>
             </div>
+          ) : usageError ? (
+            <p className="mt-2 text-sm text-red-600">{usageError}</p>
           ) : (
             <p className="mt-2 text-sm text-slate-600">Loading usage...</p>
           )}

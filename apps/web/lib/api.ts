@@ -93,7 +93,18 @@ export async function uploadAsset(uploadUrl: string, file: File, headers: Record
   });
 
   if (!response.ok) {
-    throw new Error(`Upload failed (${response.status})`);
+    const contentType = response.headers.get('content-type') ?? '';
+    let detail = '';
+
+    if (contentType.includes('application/json')) {
+      const payload = (await response.json().catch(() => ({}))) as JsonObject;
+      detail = typeof payload.detail === 'string' ? payload.detail : '';
+    } else {
+      detail = (await response.text().catch(() => '')).trim();
+    }
+
+    const suffix = detail ? `: ${detail.slice(0, 200)}` : '';
+    throw new Error(`Upload failed (${response.status})${suffix}`);
   }
 }
 
