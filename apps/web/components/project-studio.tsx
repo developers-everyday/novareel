@@ -235,7 +235,7 @@ export function ProjectStudio() {
           token
         );
 
-        await uploadAsset(upload.upload_url, file, upload.headers, token);
+        await uploadAsset(`/v1/projects/${project.id}/assets/${upload.asset_id}:upload`, file, upload.headers, token);
       }
 
       const idempotencyKey =
