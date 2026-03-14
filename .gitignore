@@ -16,6 +16,7 @@ __pycache__/
 .env.*
 !.env.example
 !.env.production.example
+export_env.sh
 
 # OS
 .DS_Store

@@ -10,7 +10,7 @@ class Settings(BaseSettings):
   model_config = SettingsConfigDict(
     env_prefix='NOVAREEL_',
     env_file=[
-      str(Path(__file__).resolve().parents[4] / '.env'),  # project root
+      str(Path(__file__).resolve().parents[2] / '.env'),  # backend service root (or /app in containers)
       '.env',                                              # CWD fallback
     ],
     extra='ignore',

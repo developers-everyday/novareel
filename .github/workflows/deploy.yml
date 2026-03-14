@@ -22,9 +22,64 @@ jobs:
   test:
     uses: ./.github/workflows/ci.yml
 
+  # ── Bootstrap shared infrastructure/ECR ──
+  bootstrap-infra:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Bootstrap CloudFormation stack
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+          CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+          NOVAREEL_CLERK_JWKS_URL: ${{ vars.NOVAREEL_CLERK_JWKS_URL }}
+          NOVAREEL_CLERK_ISSUER: ${{ vars.NOVAREEL_CLERK_ISSUER }}
+          NOVAREEL_CLERK_AUDIENCE: ${{ vars.NOVAREEL_CLERK_AUDIENCE }}
+          NOVAREEL_CORS_ORIGIN: ${{ vars.NOVAREEL_CORS_ORIGIN }}
+          NOVAREEL_GOOGLE_CLIENT_ID: ${{ vars.NOVAREEL_GOOGLE_CLIENT_ID }}
+          NOVAREEL_SOCIAL_REDIRECT_BASE_URL: ${{ vars.NOVAREEL_SOCIAL_REDIRECT_BASE_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NOVAREEL_PEXELS_API_KEY: ${{ secrets.NOVAREEL_PEXELS_API_KEY }}
+          NOVAREEL_ELEVENLABS_API_KEY: ${{ secrets.NOVAREEL_ELEVENLABS_API_KEY }}
+          NOVAREEL_GOOGLE_CLIENT_SECRET: ${{ secrets.NOVAREEL_GOOGLE_CLIENT_SECRET }}
+          NOVAREEL_ENCRYPTION_KEY: ${{ secrets.NOVAREEL_ENCRYPTION_KEY }}
+        run: |
+          PARAMS=("Environment=${ENVIRONMENT}")
+          [[ -n "${CLERK_PUBLISHABLE_KEY}" ]] && PARAMS+=("ClerkPublishableKey=${CLERK_PUBLISHABLE_KEY}")
+          [[ -n "${NOVAREEL_CLERK_JWKS_URL}" ]] && PARAMS+=("ClerkJwksUrl=${NOVAREEL_CLERK_JWKS_URL}")
+          [[ -n "${NOVAREEL_CLERK_ISSUER}" ]] && PARAMS+=("ClerkIssuer=${NOVAREEL_CLERK_ISSUER}")
+          [[ -n "${NOVAREEL_CLERK_AUDIENCE}" ]] && PARAMS+=("ClerkAudience=${NOVAREEL_CLERK_AUDIENCE}")
+          [[ -n "${NOVAREEL_CORS_ORIGIN}" ]] && PARAMS+=("CorsOrigin=${NOVAREEL_CORS_ORIGIN}")
+          [[ -n "${NOVAREEL_GOOGLE_CLIENT_ID}" ]] && PARAMS+=("GoogleClientId=${NOVAREEL_GOOGLE_CLIENT_ID}")
+          [[ -n "${NOVAREEL_SOCIAL_REDIRECT_BASE_URL}" ]] && PARAMS+=("SocialRedirectBaseUrl=${NOVAREEL_SOCIAL_REDIRECT_BASE_URL}")
+          [[ -n "${CLERK_SECRET_KEY}" ]] && PARAMS+=("ClerkSecretKey=${CLERK_SECRET_KEY}")
+          [[ -n "${NOVAREEL_PEXELS_API_KEY}" ]] && PARAMS+=("PexelsApiKey=${NOVAREEL_PEXELS_API_KEY}")
+          [[ -n "${NOVAREEL_ELEVENLABS_API_KEY}" ]] && PARAMS+=("ElevenlabsApiKey=${NOVAREEL_ELEVENLABS_API_KEY}")
+          [[ -n "${NOVAREEL_GOOGLE_CLIENT_SECRET}" ]] && PARAMS+=("GoogleClientSecret=${NOVAREEL_GOOGLE_CLIENT_SECRET}")
+          [[ -n "${NOVAREEL_ENCRYPTION_KEY}" ]] && PARAMS+=("EncryptionKey=${NOVAREEL_ENCRYPTION_KEY}")
+
+          aws cloudformation deploy \
+            --template-file infra/cloudformation.yml \
+            --stack-name "novareel-${ENVIRONMENT}" \
+            --region ${{ env.AWS_REGION }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides "${PARAMS[@]}" \
+            --no-fail-on-empty-changeset
+
   # ── Build and Push Docker Images ──────────
   build-and-push:
-    needs: test
+    needs: bootstrap-infra
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment || 'production' }}
     permissions:
@@ -98,16 +153,41 @@ jobs:
       - name: Deploy CloudFormation stack
         env:
           ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+          CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+          NOVAREEL_CLERK_JWKS_URL: ${{ vars.NOVAREEL_CLERK_JWKS_URL }}
+          NOVAREEL_CLERK_ISSUER: ${{ vars.NOVAREEL_CLERK_ISSUER }}
+          NOVAREEL_CLERK_AUDIENCE: ${{ vars.NOVAREEL_CLERK_AUDIENCE }}
+          NOVAREEL_CORS_ORIGIN: ${{ vars.NOVAREEL_CORS_ORIGIN }}
+          NOVAREEL_GOOGLE_CLIENT_ID: ${{ vars.NOVAREEL_GOOGLE_CLIENT_ID }}
+          NOVAREEL_SOCIAL_REDIRECT_BASE_URL: ${{ vars.NOVAREEL_SOCIAL_REDIRECT_BASE_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NOVAREEL_PEXELS_API_KEY: ${{ secrets.NOVAREEL_PEXELS_API_KEY }}
+          NOVAREEL_ELEVENLABS_API_KEY: ${{ secrets.NOVAREEL_ELEVENLABS_API_KEY }}
+          NOVAREEL_GOOGLE_CLIENT_SECRET: ${{ secrets.NOVAREEL_GOOGLE_CLIENT_SECRET }}
+          NOVAREEL_ENCRYPTION_KEY: ${{ secrets.NOVAREEL_ENCRYPTION_KEY }}
         run: |
+          PARAMS=("Environment=${ENVIRONMENT}")
+          [[ -n "${CLERK_PUBLISHABLE_KEY}" ]] && PARAMS+=("ClerkPublishableKey=${CLERK_PUBLISHABLE_KEY}")
+          [[ -n "${NOVAREEL_CLERK_JWKS_URL}" ]] && PARAMS+=("ClerkJwksUrl=${NOVAREEL_CLERK_JWKS_URL}")
+          [[ -n "${NOVAREEL_CLERK_ISSUER}" ]] && PARAMS+=("ClerkIssuer=${NOVAREEL_CLERK_ISSUER}")
+          [[ -n "${NOVAREEL_CLERK_AUDIENCE}" ]] && PARAMS+=("ClerkAudience=${NOVAREEL_CLERK_AUDIENCE}")
+          [[ -n "${NOVAREEL_CORS_ORIGIN}" ]] && PARAMS+=("CorsOrigin=${NOVAREEL_CORS_ORIGIN}")
+          [[ -n "${NOVAREEL_GOOGLE_CLIENT_ID}" ]] && PARAMS+=("GoogleClientId=${NOVAREEL_GOOGLE_CLIENT_ID}")
+          [[ -n "${NOVAREEL_SOCIAL_REDIRECT_BASE_URL}" ]] && PARAMS+=("SocialRedirectBaseUrl=${NOVAREEL_SOCIAL_REDIRECT_BASE_URL}")
+          [[ -n "${CLERK_SECRET_KEY}" ]] && PARAMS+=("ClerkSecretKey=${CLERK_SECRET_KEY}")
+          [[ -n "${NOVAREEL_PEXELS_API_KEY}" ]] && PARAMS+=("PexelsApiKey=${NOVAREEL_PEXELS_API_KEY}")
+          [[ -n "${NOVAREEL_ELEVENLABS_API_KEY}" ]] && PARAMS+=("ElevenlabsApiKey=${NOVAREEL_ELEVENLABS_API_KEY}")
+          [[ -n "${NOVAREEL_GOOGLE_CLIENT_SECRET}" ]] && PARAMS+=("GoogleClientSecret=${NOVAREEL_GOOGLE_CLIENT_SECRET}")
+          [[ -n "${NOVAREEL_ENCRYPTION_KEY}" ]] && PARAMS+=("EncryptionKey=${NOVAREEL_ENCRYPTION_KEY}")
+          PARAMS+=("ApiImageUri=${{ needs.build-and-push.outputs.api_image }}")
+          PARAMS+=("WorkerImageUri=${{ needs.build-and-push.outputs.worker_image }}")
+
           aws cloudformation deploy \
             --template-file infra/cloudformation.yml \
             --stack-name "novareel-${ENVIRONMENT}" \
             --region ${{ env.AWS_REGION }} \
             --capabilities CAPABILITY_NAMED_IAM \
-            --parameter-overrides \
-              Environment="${ENVIRONMENT}" \
-              ApiImageUri="${{ needs.build-and-push.outputs.api_image }}" \
-              WorkerImageUri="${{ needs.build-and-push.outputs.worker_image }}" \
+            --parameter-overrides "${PARAMS[@]}" \
             --no-fail-on-empty-changeset
 
       - name: Wait for ECS services to stabilize
