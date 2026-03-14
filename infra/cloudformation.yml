@@ -61,6 +61,18 @@ Parameters:
     Type: String
     Default: ''
 
+  ClerkJwksUrl:
+    Type: String
+    Default: 'https://clerk.dev/.well-known/jwks.json'
+
+  ClerkIssuer:
+    Type: String
+    Default: ''
+
+  ClerkAudience:
+    Type: String
+    Default: ''
+
   PexelsApiKey:
     Type: String
     NoEcho: true
@@ -71,22 +83,48 @@ Parameters:
     NoEcho: true
     Default: ''
 
+  GoogleClientId:
+    Type: String
+    Default: ''
+
+  GoogleClientSecret:
+    Type: String
+    NoEcho: true
+    Default: ''
+
+  EncryptionKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+
   DomainName:
     Type: String
     Default: ''
     Description: Custom domain (optional). Leave blank to use ALB DNS.
+
+  SocialRedirectBaseUrl:
+    Type: String
+    Default: ''
+    Description: Optional redirect base URL for social OAuth callbacks.
 
   CorsOrigin:
     Type: String
     Default: '*'
     Description: Allowed CORS origin for the API
 
+  FrontendUrl:
+    Type: String
+    Default: ''
+    Description: Public HTTPS URL of the frontend (e.g. Amplify URL). Used as the base for asset upload URLs so browsers upload via the HTTPS proxy instead of direct S3.
+
 # ─────────────────────────────────────────────
 # Conditions
 # ─────────────────────────────────────────────
 Conditions:
   HasApiImage: !Not [!Equals [!Ref ApiImageUri, '']]
+  HasFrontendUrl: !Not [!Equals [!Ref FrontendUrl, '']]
   HasWorkerImage: !Not [!Equals [!Ref WorkerImageUri, '']]
+  HasSocialRedirectBaseUrl: !Not [!Equals [!Ref SocialRedirectBaseUrl, '']]
 
 # ─────────────────────────────────────────────
 # Resources
@@ -387,10 +425,15 @@ Resources:
                   - dynamodb:Scan
                 Resource:
                   - !GetAtt ProjectsTable.Arn
+                  - !GetAtt AssetsTable.Arn
                   - !GetAtt JobsTable.Arn
                   - !GetAtt ResultsTable.Arn
                   - !GetAtt UsageTable.Arn
                   - !GetAtt AnalyticsTable.Arn
+                  - !GetAtt BrandKitsTable.Arn
+                  - !GetAtt LibraryAssetsTable.Arn
+                  - !GetAtt SocialConnectionsTable.Arn
+                  - !GetAtt PublishRecordsTable.Arn
                   - !Sub ${ProjectsTable.Arn}/index/*
                   - !Sub ${JobsTable.Arn}/index/*
               # S3
@@ -439,7 +482,9 @@ Resources:
         {
           "CLERK_SECRET_KEY": "${ClerkSecretKey}",
           "NOVAREEL_PEXELS_API_KEY": "${PexelsApiKey}",
-          "NOVAREEL_ELEVENLABS_API_KEY": "${ElevenlabsApiKey}"
+          "NOVAREEL_ELEVENLABS_API_KEY": "${ElevenlabsApiKey}",
+          "NOVAREEL_GOOGLE_CLIENT_SECRET": "${GoogleClientSecret}",
+          "NOVAREEL_ENCRYPTION_KEY": "${EncryptionKey}"
         }
 
   # ── CloudWatch Log Groups ────────────────
@@ -465,6 +510,9 @@ Resources:
       Memory: !Ref ApiMemory
       NetworkMode: awsvpc
       RequiresCompatibilities: [FARGATE]
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
       TaskRoleArn: !GetAtt ECSTaskRole.Arn
       ContainerDefinitions:
@@ -479,6 +527,12 @@ Resources:
               Value: !Ref Environment
             - Name: NOVAREEL_AUTH_DISABLED
               Value: 'false'
+            - Name: NOVAREEL_CLERK_JWKS_URL
+              Value: !Ref ClerkJwksUrl
+            - Name: NOVAREEL_CLERK_ISSUER
+              Value: !Ref ClerkIssuer
+            - Name: NOVAREEL_CLERK_AUDIENCE
+              Value: !Ref ClerkAudience
             - Name: NOVAREEL_USE_MOCK_AI
               Value: 'false'
             - Name: NOVAREEL_STORAGE_BACKEND
@@ -504,18 +558,29 @@ Resources:
             - Name: NOVAREEL_CDN_BASE_URL
               Value: !Sub https://${CloudFrontDistribution.DomainName}
             - Name: NOVAREEL_PUBLIC_API_BASE_URL
-              Value: !Sub http://${ALB.DNSName}
+              Value: !If [HasFrontendUrl, !Ref FrontendUrl, !Sub 'http://${ALB.DNSName}']
             - Name: NOVAREEL_CORS_ORIGINS
               Value: !Sub '["${CorsOrigin}"]'
+            - Name: NOVAREEL_GOOGLE_CLIENT_ID
+              Value: !Ref GoogleClientId
+            - Name: NOVAREEL_SOCIAL_REDIRECT_BASE_URL
+              Value: !If
+                - HasSocialRedirectBaseUrl
+                - !Ref SocialRedirectBaseUrl
+                - !Sub http://${ALB.DNSName}
             - Name: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
               Value: !Ref ClerkPublishableKey
           Secrets:
             - Name: CLERK_SECRET_KEY
-              ValueFrom: !Sub ${AppSecret}:CLERK_SECRET_KEY::
+              ValueFrom: !Sub '${AppSecret}:CLERK_SECRET_KEY::'
             - Name: NOVAREEL_PEXELS_API_KEY
-              ValueFrom: !Sub ${AppSecret}:NOVAREEL_PEXELS_API_KEY::
+              ValueFrom: !Sub '${AppSecret}:NOVAREEL_PEXELS_API_KEY::'
             - Name: NOVAREEL_ELEVENLABS_API_KEY
-              ValueFrom: !Sub ${AppSecret}:NOVAREEL_ELEVENLABS_API_KEY::
+              ValueFrom: !Sub '${AppSecret}:NOVAREEL_ELEVENLABS_API_KEY::'
+            - Name: NOVAREEL_GOOGLE_CLIENT_SECRET
+              ValueFrom: !Sub '${AppSecret}:NOVAREEL_GOOGLE_CLIENT_SECRET::'
+            - Name: NOVAREEL_ENCRYPTION_KEY
+              ValueFrom: !Sub '${AppSecret}:NOVAREEL_ENCRYPTION_KEY::'
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -532,6 +597,9 @@ Resources:
       Memory: !Ref WorkerMemory
       NetworkMode: awsvpc
       RequiresCompatibilities: [FARGATE]
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
       TaskRoleArn: !GetAtt ECSTaskRole.Arn
       ContainerDefinitions:
@@ -568,14 +636,14 @@ Resources:
             - Name: NOVAREEL_CDN_BASE_URL
               Value: !Sub https://${CloudFrontDistribution.DomainName}
             - Name: NOVAREEL_PUBLIC_API_BASE_URL
-              Value: !Sub http://${ALB.DNSName}
+              Value: !If [HasFrontendUrl, !Ref FrontendUrl, !Sub 'http://${ALB.DNSName}']
             - Name: NOVAREEL_FFMPEG_PRESET
               Value: medium
           Secrets:
             - Name: NOVAREEL_PEXELS_API_KEY
-              ValueFrom: !Sub ${AppSecret}:NOVAREEL_PEXELS_API_KEY::
+              ValueFrom: !Sub '${AppSecret}:NOVAREEL_PEXELS_API_KEY::'
             - Name: NOVAREEL_ELEVENLABS_API_KEY
-              ValueFrom: !Sub ${AppSecret}:NOVAREEL_ELEVENLABS_API_KEY::
+              ValueFrom: !Sub '${AppSecret}:NOVAREEL_ELEVENLABS_API_KEY::'
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -691,15 +759,25 @@ Resources:
       TableName: !Sub novareel-${Environment}-projects
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: owner_id
-          AttributeType: S
         - AttributeName: id
           AttributeType: S
       KeySchema:
-        - AttributeName: owner_id
-          KeyType: HASH
         - AttributeName: id
-          KeyType: RANGE
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  AssetsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub novareel-${Environment}-projects-assets
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
@@ -709,24 +787,11 @@ Resources:
       TableName: !Sub novareel-${Environment}-jobs
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: project_id
-          AttributeType: S
         - AttributeName: id
-          AttributeType: S
-        - AttributeName: status
           AttributeType: S
       KeySchema:
-        - AttributeName: project_id
-          KeyType: HASH
         - AttributeName: id
-          KeyType: RANGE
-      GlobalSecondaryIndexes:
-        - IndexName: status-index
-          KeySchema:
-            - AttributeName: status
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
+          KeyType: HASH
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
@@ -736,11 +801,15 @@ Resources:
       TableName: !Sub novareel-${Environment}-results
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
+        - AttributeName: project_id
+          AttributeType: S
         - AttributeName: job_id
           AttributeType: S
       KeySchema:
-        - AttributeName: job_id
+        - AttributeName: project_id
           KeyType: HASH
+        - AttributeName: job_id
+          KeyType: RANGE
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
@@ -750,15 +819,11 @@ Resources:
       TableName: !Sub novareel-${Environment}-usage
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: owner_id
-          AttributeType: S
-        - AttributeName: period
+        - AttributeName: id
           AttributeType: S
       KeySchema:
-        - AttributeName: owner_id
+        - AttributeName: id
           KeyType: HASH
-        - AttributeName: period
-          KeyType: RANGE
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
@@ -768,15 +833,67 @@ Resources:
       TableName: !Sub novareel-${Environment}-analytics
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: owner_id
+        - AttributeName: id
           AttributeType: S
-        - AttributeName: timestamp_event
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  BrandKitsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub novareel-${Environment}-projects-brand-kits
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: owner_id
           AttributeType: S
       KeySchema:
         - AttributeName: owner_id
           KeyType: HASH
-        - AttributeName: timestamp_event
-          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  LibraryAssetsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub novareel-${Environment}-projects-library-assets
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  SocialConnectionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub novareel-${Environment}-projects-social-connections
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  PublishRecordsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub novareel-${Environment}-projects-publish-records
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
@@ -803,7 +920,8 @@ Resources:
         CorsRules:
           - AllowedHeaders: ['*']
             AllowedMethods: [GET, PUT, POST]
-            AllowedOrigins: ['*']
+            AllowedOrigins:
+              - !Ref CorsOrigin
             MaxAge: 3600
 
   AssetBucketPolicy:
@@ -934,6 +1052,8 @@ Outputs:
 
   ProjectsTableName:
     Value: !Ref ProjectsTable
+  AssetsTableName:
+    Value: !Ref AssetsTable
   JobsTableName:
     Value: !Ref JobsTable
   ResultsTableName:
@@ -942,6 +1062,14 @@ Outputs:
     Value: !Ref UsageTable
   AnalyticsTableName:
     Value: !Ref AnalyticsTable
+  BrandKitsTableName:
+    Value: !Ref BrandKitsTable
+  LibraryAssetsTableName:
+    Value: !Ref LibraryAssetsTable
+  SocialConnectionsTableName:
+    Value: !Ref SocialConnectionsTable
+  PublishRecordsTableName:
+    Value: !Ref PublishRecordsTable
 
   ECSClusterName:
     Value: !Ref ECSCluster

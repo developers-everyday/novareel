@@ -17,6 +17,7 @@ INFRA_ONLY=false
 AWS_REGION="${AWS_REGION:-us-east-1}"
 STACK_NAME=""
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -33,6 +34,47 @@ AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 API_ECR_REPO="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/novareel-${ENVIRONMENT}-api"
 WORKER_ECR_REPO="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/novareel-${ENVIRONMENT}-worker"
 IMAGE_TAG="$(git rev-parse --short HEAD)-$(date +%s)"
+PARAMETER_OVERRIDES=("Environment=${ENVIRONMENT}")
+
+if [[ -n "${CLERK_PUBLISHABLE_KEY:-}" ]]; then
+  PARAMETER_OVERRIDES+=("ClerkPublishableKey=${CLERK_PUBLISHABLE_KEY}")
+fi
+if [[ -n "${NOVAREEL_CLERK_JWKS_URL:-}" ]]; then
+  PARAMETER_OVERRIDES+=("ClerkJwksUrl=${NOVAREEL_CLERK_JWKS_URL}")
+fi
+if [[ -n "${NOVAREEL_CLERK_ISSUER:-}" ]]; then
+  PARAMETER_OVERRIDES+=("ClerkIssuer=${NOVAREEL_CLERK_ISSUER}")
+fi
+if [[ -n "${NOVAREEL_CLERK_AUDIENCE:-}" ]]; then
+  PARAMETER_OVERRIDES+=("ClerkAudience=${NOVAREEL_CLERK_AUDIENCE}")
+fi
+if [[ -n "${CLERK_SECRET_KEY:-}" ]]; then
+  PARAMETER_OVERRIDES+=("ClerkSecretKey=${CLERK_SECRET_KEY}")
+fi
+if [[ -n "${NOVAREEL_PEXELS_API_KEY:-}" ]]; then
+  PARAMETER_OVERRIDES+=("PexelsApiKey=${NOVAREEL_PEXELS_API_KEY}")
+fi
+if [[ -n "${NOVAREEL_ELEVENLABS_API_KEY:-}" ]]; then
+  PARAMETER_OVERRIDES+=("ElevenlabsApiKey=${NOVAREEL_ELEVENLABS_API_KEY}")
+fi
+if [[ -n "${NOVAREEL_GOOGLE_CLIENT_ID:-}" ]]; then
+  PARAMETER_OVERRIDES+=("GoogleClientId=${NOVAREEL_GOOGLE_CLIENT_ID}")
+fi
+if [[ -n "${NOVAREEL_GOOGLE_CLIENT_SECRET:-}" ]]; then
+  PARAMETER_OVERRIDES+=("GoogleClientSecret=${NOVAREEL_GOOGLE_CLIENT_SECRET}")
+fi
+if [[ -n "${NOVAREEL_ENCRYPTION_KEY:-}" ]]; then
+  PARAMETER_OVERRIDES+=("EncryptionKey=${NOVAREEL_ENCRYPTION_KEY}")
+fi
+if [[ -n "${NOVAREEL_SOCIAL_REDIRECT_BASE_URL:-}" ]]; then
+  PARAMETER_OVERRIDES+=("SocialRedirectBaseUrl=${NOVAREEL_SOCIAL_REDIRECT_BASE_URL}")
+fi
+if [[ -n "${NOVAREEL_CORS_ORIGIN:-}" ]]; then
+  PARAMETER_OVERRIDES+=("CorsOrigin=${NOVAREEL_CORS_ORIGIN}")
+fi
+if [[ -n "${NOVAREEL_FRONTEND_URL:-}" ]]; then
+  PARAMETER_OVERRIDES+=("FrontendUrl=${NOVAREEL_FRONTEND_URL}")
+fi
 
 echo "╔══════════════════════════════════════════╗"
 echo "║  NovaReel Deploy                         ║"
@@ -40,6 +82,7 @@ echo "╠═══════════════════════�
 echo "║  Environment : ${ENVIRONMENT}"
 echo "║  Region      : ${AWS_REGION}"
 echo "║  Account     : ${AWS_ACCOUNT_ID}"
+echo "║  Platform    : ${DOCKER_PLATFORM}"
 echo "║  Image Tag   : ${IMAGE_TAG}"
 echo "╚══════════════════════════════════════════╝"
 echo ""
@@ -57,8 +100,7 @@ if echo "${STACK_EXISTS}" | grep -q "does not exist"; then
     --stack-name "${STACK_NAME}" \
     --region "${AWS_REGION}" \
     --capabilities CAPABILITY_NAMED_IAM \
-    --parameter-overrides \
-      Environment="${ENVIRONMENT}" \
+    --parameter-overrides "${PARAMETER_OVERRIDES[@]}" \
     --no-fail-on-empty-changeset
   echo "  ✔ Infrastructure stack created."
 else
@@ -68,6 +110,7 @@ else
     --stack-name "${STACK_NAME}" \
     --region "${AWS_REGION}" \
     --capabilities CAPABILITY_NAMED_IAM \
+    --parameter-overrides "${PARAMETER_OVERRIDES[@]}" \
     --no-fail-on-empty-changeset
   echo "  ✔ Infrastructure stack updated."
 fi
@@ -87,6 +130,7 @@ if [ "$SKIP_BUILD" = false ]; then
 
   echo "  Building API image..."
   docker build \
+    --platform "${DOCKER_PLATFORM}" \
     -f "${PROJECT_ROOT}/infra/docker/Dockerfile.api" \
     -t "${API_ECR_REPO}:${IMAGE_TAG}" \
     -t "${API_ECR_REPO}:latest" \
@@ -94,6 +138,7 @@ if [ "$SKIP_BUILD" = false ]; then
 
   echo "  Building Worker image..."
   docker build \
+    --platform "${DOCKER_PLATFORM}" \
     -f "${PROJECT_ROOT}/infra/docker/Dockerfile.worker" \
     -t "${WORKER_ECR_REPO}:${IMAGE_TAG}" \
     -t "${WORKER_ECR_REPO}:latest" \
@@ -124,15 +169,16 @@ fi
 echo ""
 echo "▶ Step 4: Updating stack with image URIs..."
 
+IMAGE_PARAMETER_OVERRIDES=("${PARAMETER_OVERRIDES[@]}")
+IMAGE_PARAMETER_OVERRIDES+=("ApiImageUri=${API_ECR_REPO}:${IMAGE_TAG}")
+IMAGE_PARAMETER_OVERRIDES+=("WorkerImageUri=${WORKER_ECR_REPO}:${IMAGE_TAG}")
+
 aws cloudformation deploy \
   --template-file "${PROJECT_ROOT}/infra/cloudformation.yml" \
   --stack-name "${STACK_NAME}" \
   --region "${AWS_REGION}" \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides \
-    Environment="${ENVIRONMENT}" \
-    ApiImageUri="${API_ECR_REPO}:${IMAGE_TAG}" \
-    WorkerImageUri="${WORKER_ECR_REPO}:${IMAGE_TAG}" \
+  --parameter-overrides "${IMAGE_PARAMETER_OVERRIDES[@]}" \
   --no-fail-on-empty-changeset
 
 echo "  ✔ ECS services updated."

@@ -124,22 +124,17 @@ class S3StorageService(StorageService):
     except ImportError as exc:
       raise RuntimeError('boto3 is required for S3StorageService') from exc
 
+    from botocore.config import Config
     self._settings = settings
     self._bucket = settings.s3_bucket_name
-    self._client = boto3.client('s3', region_name=settings.aws_region)
+    self._client = boto3.client('s3', region_name=settings.aws_region,
+                                config=Config(signature_version='s3v4'))
 
   def create_upload_url(self, asset: AssetRecord) -> AssetUploadUrlResponse:
-    upload_url = self._client.generate_presigned_url(
-      'put_object',
-      Params={
-        'Bucket': self._bucket,
-        'Key': asset.object_key,
-        'ContentType': asset.content_type,
-      },
-      ExpiresIn=3600,
-      HttpMethod='PUT',
+    upload_url = (
+      f"{self._settings.public_api_base_url.rstrip('/')}"
+      f"/v1/projects/{asset.project_id}/assets/{asset.id}:upload"
     )
-
     return AssetUploadUrlResponse(
       asset_id=asset.id,
       object_key=asset.object_key,

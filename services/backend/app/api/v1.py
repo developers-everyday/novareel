@@ -115,6 +115,34 @@ def create_asset_upload_url(
   return storage.create_upload_url(asset)
 
 
+@router.post('/projects/{project_id}/assets/{asset_id}:confirm-upload', status_code=status.HTTP_200_OK)
+def confirm_asset_upload(
+  project_id: str,
+  asset_id: str,
+  current_user: AuthUser = Depends(get_current_user),
+  repo: Repository = Depends(get_repository),
+) -> dict[str, object]:
+  """Mark an asset as uploaded after a successful direct-to-S3 PUT."""
+  project = repo.get_project(project_id)
+  if not project:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Project not found')
+
+  _require_owner(project.owner_id, current_user)
+
+  asset = repo.get_asset(asset_id)
+  if not asset or asset.project_id != project_id:
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Asset not found')
+
+  updated = repo.mark_asset_uploaded(asset_id)
+  repo.record_analytics_event(
+    owner_id=current_user.user_id,
+    event_name='asset_uploaded',
+    project_id=project_id,
+    properties={'asset_id': updated.id, 'file_size': asset.file_size},
+  )
+  return {'asset_id': updated.id, 'uploaded': updated.uploaded}
+
+
 @router.put('/projects/{project_id}/assets/{asset_id}:upload')
 async def upload_asset_bytes(
   project_id: str,

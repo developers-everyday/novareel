@@ -20,7 +20,8 @@ import {
   listProjects,
   trackAnalyticsEvent,
   translateProject,
-  uploadAsset
+  uploadAsset,
+  confirmAssetUpload
 } from '@/lib/api';
 import type { GenerationJob, Project, UsageSummary, VideoResult, StoryboardScene } from '@/lib/contracts';
 import { JobStatusCard } from '@/components/job-status-card';
@@ -257,6 +258,7 @@ export function ProjectStudio() {
         );
 
         await uploadAsset(upload.upload_url, file, upload.headers, token);
+        await confirmAssetUpload(project.id, upload.asset_id, token);
       }
 
       const idempotencyKey =

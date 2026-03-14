@@ -108,6 +108,12 @@ export async function uploadAsset(uploadUrl: string, file: File, headers: Record
   }
 }
 
+export async function confirmAssetUpload(projectId: string, assetId: string, token?: string | null): Promise<void> {
+  await apiRequest<Record<string, unknown>>(`/v1/projects/${projectId}/assets/${assetId}:confirm-upload`, {
+    method: 'POST',
+  }, token);
+}
+
 export async function generateProject(
   projectId: string,
   input: {
