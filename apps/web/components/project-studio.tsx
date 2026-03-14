@@ -55,7 +55,7 @@ function formatDate(value: string): string {
 }
 
 export function ProjectStudio() {
-  const { getToken } = useAuth();
+  const { getToken, isLoaded, userId } = useAuth();
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -137,8 +137,12 @@ export function ProjectStudio() {
   }
 
   useEffect(() => {
+    if (!isLoaded || !userId) {
+      return;
+    }
+
     refreshSideData().catch(() => undefined);
-  }, []);
+  }, [isLoaded, userId]);
 
   useEffect(() => {
     let interval: NodeJS.Timeout | undefined;
