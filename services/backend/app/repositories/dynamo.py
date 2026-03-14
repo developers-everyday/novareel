@@ -1,11 +1,23 @@
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app.config import Settings
+
+
+def _floats_to_decimal(obj: Any) -> Any:
+  """Recursively convert float values to Decimal for DynamoDB compatibility."""
+  if isinstance(obj, float):
+    return Decimal(str(obj))
+  if isinstance(obj, dict):
+    return {k: _floats_to_decimal(v) for k, v in obj.items()}
+  if isinstance(obj, list):
+    return [_floats_to_decimal(i) for i in obj]
+  return obj
 from app.models import (
   AssetRecord,
   AnalyticsEventRecord,
@@ -58,7 +70,7 @@ class DynamoRepository(Repository):
       created_at=self._utcnow(),
       asset_ids=[],
     )
-    self._projects.put_item(Item=project.model_dump(mode='json'))
+    self._projects.put_item(Item=_floats_to_decimal(project.model_dump(mode='json')))
     return project
 
   def get_project(self, project_id: str) -> ProjectRecord | None:
@@ -97,14 +109,14 @@ class DynamoRepository(Repository):
       uploaded=False,
       created_at=self._utcnow(),
     )
-    self._assets.put_item(Item=asset.model_dump(mode='json'))
+    self._assets.put_item(Item=_floats_to_decimal(asset.model_dump(mode='json')))
 
     project = self.get_project(project_id)
     if not project:
       raise ValueError('Project not found')
 
     project.asset_ids.append(asset.id)
-    self._projects.put_item(Item=project.model_dump(mode='json'))
+    self._projects.put_item(Item=_floats_to_decimal(project.model_dump(mode='json')))
     return asset
 
   def get_asset(self, asset_id: str) -> AssetRecord | None:
@@ -132,7 +144,7 @@ class DynamoRepository(Repository):
       raise ValueError('Asset not found')
 
     asset.uploaded = True
-    self._assets.put_item(Item=asset.model_dump(mode='json'))
+    self._assets.put_item(Item=_floats_to_decimal(asset.model_dump(mode='json')))
     return asset
 
   def create_job(
@@ -178,7 +190,7 @@ class DynamoRepository(Repository):
       auto_approve=params.auto_approve,
       variant_group_id=params.variant_group_id,
     )
-    self._jobs.put_item(Item=job.model_dump(mode='json'))
+    self._jobs.put_item(Item=_floats_to_decimal(job.model_dump(mode='json')))
     return job
 
   def claim_job(self, job_id: str) -> GenerationJobRecord | None:
@@ -293,11 +305,11 @@ class DynamoRepository(Repository):
       job.review_notes = review_notes
     job.updated_at = self._utcnow()
 
-    self._jobs.put_item(Item=job.model_dump(mode='json'))
+    self._jobs.put_item(Item=_floats_to_decimal(job.model_dump(mode='json')))
     return job
 
   def set_result(self, project_id: str, job_id: str, result: VideoResultRecord) -> VideoResultRecord:
-    self._results.put_item(Item=result.model_dump(mode='json'))
+    self._results.put_item(Item=_floats_to_decimal(result.model_dump(mode='json')))
     return result
 
   def get_result(self, project_id: str, job_id: str | None = None) -> VideoResultRecord | None:
@@ -373,7 +385,7 @@ class DynamoRepository(Repository):
       properties=properties or {},
       created_at=self._utcnow(),
     )
-    self._analytics.put_item(Item=event.model_dump(mode='json'))
+    self._analytics.put_item(Item=_floats_to_decimal(event.model_dump(mode='json')))
     return event
 
   def list_analytics_events(self, owner_id: str | None = None, limit: int = 100) -> list[AnalyticsEventRecord]:
@@ -399,7 +411,7 @@ class DynamoRepository(Repository):
   # ── Phase 3 — Brand Kit & Asset Library ──────────────────────────────────
 
   def set_brand_kit(self, owner_id: str, brand_kit: BrandKitRecord) -> BrandKitRecord:
-    self._brand_kits.put_item(Item=brand_kit.model_dump(mode='json'))
+    self._brand_kits.put_item(Item=_floats_to_decimal(brand_kit.model_dump(mode='json')))
     return brand_kit
 
   def get_brand_kit(self, owner_id: str) -> BrandKitRecord | None:
@@ -413,7 +425,7 @@ class DynamoRepository(Repository):
     self._brand_kits.delete_item(Key={'owner_id': owner_id})
 
   def create_library_asset(self, asset: LibraryAssetRecord) -> LibraryAssetRecord:
-    self._library_assets.put_item(Item=asset.model_dump(mode='json'))
+    self._library_assets.put_item(Item=_floats_to_decimal(asset.model_dump(mode='json')))
     return asset
 
   def list_library_assets(self, owner_id: str, asset_type: str | None = None) -> list[LibraryAssetRecord]:
@@ -441,7 +453,7 @@ class DynamoRepository(Repository):
   # ── Phase 3 — Social Connections & Publishing ──────────────────────────────
 
   def set_social_connection(self, connection: SocialConnectionRecord) -> SocialConnectionRecord:
-    self._social_connections.put_item(Item=connection.model_dump(mode='json'))
+    self._social_connections.put_item(Item=_floats_to_decimal(connection.model_dump(mode='json')))
     return connection
 
   def get_social_connection(self, owner_id: str, platform: str) -> SocialConnectionRecord | None:
@@ -467,7 +479,7 @@ class DynamoRepository(Repository):
       self._social_connections.delete_item(Key={'id': conn.id})
 
   def create_publish_record(self, record: PublishRecord) -> PublishRecord:
-    self._publish_records.put_item(Item=record.model_dump(mode='json'))
+    self._publish_records.put_item(Item=_floats_to_decimal(record.model_dump(mode='json')))
     return record
 
   def list_publish_records(self, owner_id: str, job_id: str | None = None) -> list[PublishRecord]:
