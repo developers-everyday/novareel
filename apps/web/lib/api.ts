@@ -5,7 +5,7 @@ import type {
   Storyboard, StoryboardScene, GenerateVariantsInput,
 } from '@/lib/contracts';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8000');
 
 type JsonObject = Record<string, unknown>;
 

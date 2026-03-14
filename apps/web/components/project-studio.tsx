@@ -18,12 +18,11 @@ import {
   publishToYouTube,
   listProjectJobs,
   listProjects,
-  listSocialConnections,
   trackAnalyticsEvent,
   translateProject,
   uploadAsset
 } from '@/lib/api';
-import type { GenerationJob, Project, UsageSummary, VideoResult, StoryboardScene, SocialConnection, MetadataResponse } from '@/lib/contracts';
+import type { GenerationJob, Project, UsageSummary, VideoResult, StoryboardScene } from '@/lib/contracts';
 import { JobStatusCard } from '@/components/job-status-card';
 
 const pollableStatuses = new Set<GenerationJob['status']>(['queued', 'analyzing', 'scripting', 'matching', 'narration', 'rendering', 'loading', 'translating', 'awaiting_approval']);

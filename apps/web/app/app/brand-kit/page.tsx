@@ -10,7 +10,7 @@ import {
   deleteLibraryAsset,
   uploadAsset,
 } from '@/lib/api';
-import type { BrandKit, LibraryAsset } from '@/lib/contracts';
+import type { LibraryAsset } from '@/lib/contracts';
 
 export default function BrandKitPage() {
   const { getToken } = useAuth();

@@ -1,0 +1,28 @@
+version: 1
+applications:
+  - appRoot: apps/web
+    frontend:
+      buildPath: /
+      phases:
+        preBuild:
+          commands:
+            - npm ci
+        build:
+          commands:
+            - rm -f apps/web/.env.production
+            - touch apps/web/.env.production
+            - env | grep -e '^NEXT_PUBLIC_APP_URL=' >> apps/web/.env.production || true
+            - env | grep -e '^NEXT_PUBLIC_API_BASE_URL=' >> apps/web/.env.production || true
+            - env | grep -e '^NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=' >> apps/web/.env.production || true
+            - env | grep -e '^CLERK_SECRET_KEY=' >> apps/web/.env.production || true
+            - env | grep -e '^NOVAREEL_API_ORIGIN=' >> apps/web/.env.production || true
+            - npm run build:web
+      artifacts:
+        baseDirectory: apps/web/.next
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - node_modules/**/*
+          - apps/web/node_modules/**/*
+          - apps/web/.next/cache/**/*
