@@ -37,6 +37,10 @@ class StorageService(ABC):
     """Check if a key exists in storage."""
     return False
 
+  def download_to_path(self, key: str, dest: Path) -> bool:
+    """Download a stored object to a local file path. Returns True on success."""
+    return False
+
   def delete_prefix(self, prefix: str) -> None:
     """Delete all objects with the given prefix."""
     pass
@@ -105,6 +109,19 @@ class LocalStorageService(StorageService):
     except (ValueError, OSError):
       return False
 
+  def download_to_path(self, key: str, dest: Path) -> bool:
+    try:
+      src = self._resolve_object_path(key)
+      if src.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest != src:
+          import shutil
+          shutil.copy2(src, dest)
+        return True
+    except (ValueError, OSError):
+      pass
+    return False
+
   def delete_prefix(self, prefix: str) -> None:
     import shutil
     try:
@@ -171,6 +188,14 @@ class S3StorageService(StorageService):
   def exists(self, key: str) -> bool:
     try:
       self._client.head_object(Bucket=self._bucket, Key=key)
+      return True
+    except Exception:
+      return False
+
+  def download_to_path(self, key: str, dest: Path) -> bool:
+    try:
+      dest.parent.mkdir(parents=True, exist_ok=True)
+      self._client.download_file(self._bucket, key, str(dest))
       return True
     except Exception:
       return False

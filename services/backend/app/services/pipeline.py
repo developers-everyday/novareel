@@ -504,6 +504,20 @@ def process_generation_job(
     if not assets:
       raise ValueError('no_uploaded_assets')
 
+    # Ensure all uploaded assets are available on local disk before pipeline starts.
+    # In production (S3 backend) assets are stored in S3 and must be downloaded first.
+    from app.config import get_settings as _get_settings
+    _settings = _get_settings()
+    _storage_root = _settings.local_data_dir / _settings.local_storage_dir
+    for _asset in assets:
+      _local_path = _storage_root / _asset.object_key
+      if not _local_path.exists():
+        ok = storage.download_to_path(_asset.object_key, _local_path)
+        if ok:
+          logger.info('Downloaded asset from storage: %s', _asset.object_key)
+        else:
+          logger.warning('Failed to download asset from storage: %s', _asset.object_key)
+
     # Intermediate artifact prefix for resumable pipeline (Feature D)
     prefix = f'projects/{project.id}/intermediate/{job.id}'
 
@@ -846,6 +860,14 @@ def process_generation_job(
         import tempfile
         ass_subtitle_file = Path(tempfile.mktemp(suffix='.ass', prefix='novareel-'))
         ass_subtitle_file.write_text(ass_content)
+
+    # In S3 mode, audio was stored in S3 — download for local ffmpeg rendering.
+    if not audio_path.exists():
+      ok = storage.download_to_path(audio_key, audio_path)
+      if ok:
+        logger.info('Downloaded audio from storage: %s', audio_key)
+      else:
+        logger.warning('Failed to download audio from storage: %s', audio_key)
 
     # ── RENDERING (always re-run) ─────────────────────────────────
     repo.update_job(job.id, status=JobStatus.RENDERING, stage=JobStatus.RENDERING, progress_pct=90, timings=timings)
