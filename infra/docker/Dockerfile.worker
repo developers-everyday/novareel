@@ -10,7 +10,7 @@ WORKDIR /app
 # Copy and install Python deps first (layer caching)
 COPY services/backend/pyproject.toml services/backend/README.md services/backend/setup.py* ./
 COPY services/backend/app ./app/
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir --timeout 120 --retries 5 -e .
 
 # Copy remaining backend files
 COPY services/backend/ ./
