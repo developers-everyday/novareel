@@ -779,6 +779,14 @@ def process_generation_job(
 
     transcript_url = storage.get_public_url(transcript_key)
 
+    # In S3 mode, audio was stored in S3 — download for local probing and ffmpeg rendering.
+    if not audio_path.exists():
+      ok = storage.download_to_path(audio_key, audio_path)
+      if ok:
+        logger.info('Downloaded audio from storage: %s', audio_key)
+      else:
+        logger.warning('Failed to download audio from storage: %s', audio_key)
+
     # ── RECONCILE AUDIO / VIDEO DURATIONS ─────────────────────────
     # Probe real audio duration and rescale storyboard segments so
     # the video timeline matches the narration exactly.
@@ -860,14 +868,6 @@ def process_generation_job(
         import tempfile
         ass_subtitle_file = Path(tempfile.mktemp(suffix='.ass', prefix='novareel-'))
         ass_subtitle_file.write_text(ass_content)
-
-    # In S3 mode, audio was stored in S3 — download for local ffmpeg rendering.
-    if not audio_path.exists():
-      ok = storage.download_to_path(audio_key, audio_path)
-      if ok:
-        logger.info('Downloaded audio from storage: %s', audio_key)
-      else:
-        logger.warning('Failed to download audio from storage: %s', audio_key)
 
     # ── RENDERING (always re-run) ─────────────────────────────────
     repo.update_job(job.id, status=JobStatus.RENDERING, stage=JobStatus.RENDERING, progress_pct=90, timings=timings)

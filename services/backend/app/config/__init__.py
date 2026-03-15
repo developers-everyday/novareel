@@ -81,7 +81,7 @@ class Settings(BaseSettings):
   # Phase 3 — Feature F: Performance & Scalability
   worker_mode: str = 'polling'  # 'polling' (default) or 'celery'
   celery_broker_url: str = 'redis://localhost:6379/0'
-  ffmpeg_preset: str = 'medium'  # ultrafast, veryfast, medium
+  ffmpeg_preset: str = 'veryfast'  # ultrafast, veryfast, medium
   cdn_base_url: str | None = None  # CloudFront URL (empty = direct S3/local)
   # Phase 4 — Gap C: LLM-Oriented Editing Framework
   use_editing_framework: bool = False  # When True, render via EditingPlan instead of legacy path
