@@ -35,6 +35,24 @@ Nova Pro orchestrates the pipeline (agentic loop):
 
 ---
 
+## Amazon Nova Models
+
+NovaReel is built entirely on the Amazon Nova model family, with each model assigned the task it is best suited for.
+
+**Amazon Nova Pro** (`amazon.nova-pro-v1:0`) powers the orchestration and reasoning layer. It acts as the agentic controller for the entire pipeline — deciding what to do next, invoking tools in sequence, reviewing script quality, planning per-scene media, deciding when AI-generated visuals are needed, and finalizing the workflow. It is the only model in the system that reasons across the full context of a job.
+
+**Amazon Nova Lite** (`amazon.nova-lite-v1:0`) is the multimodal workhorse. It handles understanding uploaded product images, extracting descriptions and focal regions, generating the six-scene script, supporting media planning and B-roll reasoning, translating scripts into other languages, and generating publishing metadata.
+
+**Amazon Nova 2 Multimodal Embeddings** (`amazon.nova-2-multimodal-embeddings-v1:0`) handles semantic image matching. It embeds both script lines and product images into a shared vector space so each scene is paired with the most visually relevant product photo, making the storyboard feel coherent rather than randomly assembled.
+
+**Amazon Nova Canvas** (`amazon.nova-canvas-v1:0`) handles AI image generation. When a seller only has a few product photos, Nova Canvas generates new campaign-style or lifestyle visuals using the product image as a reference, giving the final video more variety and a more premium feel.
+
+**Amazon Nova Sonic** (`amazon.nova-sonic-v1:0`) is the Nova-native voice layer. It is configured in the architecture as the default TTS provider, with EdgeTTS and ElevenLabs available as fallbacks while streaming support is being completed.
+
+Around these Nova models, the system adds storyboard review and approval, multilingual output, variant generation for A/B testing, brand kit customization, and social publishing support.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
