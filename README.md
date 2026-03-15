@@ -3,6 +3,8 @@
 Turn product photos into polished marketing videos in under 2 minutes.
 Upload images → AI writes the script, narrates it, picks visuals → exports MP4 + subtitles.
 
+![NovaReel Demo](demo.gif)
+
 **Live app:** https://master.dawy33xcd35b4.amplifyapp.com
 
 ---
