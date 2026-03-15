@@ -8,7 +8,7 @@ from pathlib import Path
 from app.config import Settings
 from app.models import (
     BrandKitRecord,
-    BrandKitUpdateRequest,
+    BrandKitRequest as BrandKitUpdateRequest,
     GenerateRequest,
     GenerateVariantsRequest,
     JobCreateParams,
