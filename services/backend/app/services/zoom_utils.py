@@ -83,10 +83,10 @@ def build_zoompan_vf(
     x_expr = f"max(0\\,min(iw-iw/zoom\\,iw*{pan_x}-iw/zoom/2))"
     y_expr = f"max(0\\,min(ih-ih/zoom\\,ih*{pan_y}-ih/zoom/2))"
 
-    # Scale source to 4× output width so zoompan has enough pixels to pan/zoom
-    # without black bars (max_zoom=1.3 needs ≥ 1.3× output width; 4× is ample).
-    # Using 8000px was 2× more than needed and caused ~4× slower rendering.
-    src_width = max(4000, width * 4)
+    # Scale source to 2× output width — enough headroom for max_zoom=1.3 to pan
+    # without black bars (needs ≥ 1.3× output width). The original 8000px was
+    # 4× the needed size and caused ~4× slower rendering per frame.
+    src_width = max(width * 2, 3840)
     vf = (
         f"scale={src_width}:-1,"
         f"zoompan=z='{zoom_expr}':x='{x_expr}':y='{y_expr}'"
