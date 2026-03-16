@@ -38,7 +38,7 @@ class NovaReelValidator:
     def __init__(self):
         self.settings = get_settings()
         self.bedrock_client = boto3.client(
-            'bedrock',
+            'bedrock-runtime',
             region_name=self.settings.aws_region,
         )
         self.s3_client = boto3.client(
@@ -106,42 +106,45 @@ class NovaReelValidator:
         logger.info('Validating Bedrock permissions...')
         
         try:
-            # Test StartAsyncInvoke permission
-            test_request = {
-                "input": {
-                    "prompt": "A simple test video of a product on a white background",
-                    "duration_seconds": 5,
-                    "aspect_ratio": "16:9",
+            # Test StartAsyncInvoke permission (text-only probe — no image needed)
+            model_input = {
+                "taskType": "TEXT_VIDEO",
+                "textToVideoParams": {
+                    "text": "A simple test video of a product on a white background",
                 },
-                "outputConfig": {
-                    "s3Location": {
-                        "bucketName": self.settings.nova_reel_output_bucket,
-                        "objectKey": "nova-reel-test/validation-test.mp4"
-                    }
+                "videoGenerationConfig": {
+                    "durationSeconds": 6,
+                    "fps": 24,
+                    "dimension": "1280x720",
+                },
+            }
+            output_data_config = {
+                "s3OutputDataConfig": {
+                    "s3Uri": f"s3://{self.settings.nova_reel_output_bucket}/nova-reel-test/permissions-probe/"
                 }
             }
-            
+
             response = self.bedrock_client.start_async_invoke(
                 modelId='amazon.nova-reel-v1:0',
-                requestBody=json.dumps(test_request)
+                modelInput=model_input,
+                outputDataConfig=output_data_config,
             )
-            
-            invocation_id = response.get('invocationArn')
-            if not invocation_id:
+
+            invocation_arn = response.get('invocationArn')
+            if not invocation_arn:
                 logger.error('No invocation ARN returned from StartAsyncInvoke')
                 return False
-                
-            invocation_id = invocation_id.split('/')[-1]
-            logger.info(f'✓ StartAsyncInvoke successful: {invocation_id}')
-            
-            # Test GetAsyncInvoke permission
+
+            logger.info(f'✓ StartAsyncInvoke successful: {invocation_arn}')
+
+            # Test GetAsyncInvoke permission — pass the full ARN directly
             response = self.bedrock_client.get_async_invoke(
-                invocationArn=f'arn:aws:bedrock:us-east-1:amazon.nova-reel-v1:0/invocation/{invocation_id}'
+                invocationArn=invocation_arn
             )
-            
+
             status = response.get('status')
             logger.info(f'✓ GetAsyncInvoke successful: status={status}')
-            
+
             return True
             
         except ClientError as e:
@@ -162,49 +165,57 @@ class NovaReelValidator:
         logger.info('Performing end-to-end validation...')
         
         try:
-            # Start a real Nova Reel invocation
-            test_request = {
-                "input": {
-                    "prompt": "A sleek modern product displayed on a clean white background, professional lighting",
-                    "duration_seconds": 5,
-                    "aspect_ratio": "16:9",
+            # Start a real Nova Reel invocation (text-to-video)
+            output_prefix = "nova-reel-test/e2e-validation/"
+            model_input = {
+                "taskType": "TEXT_VIDEO",
+                "textToVideoParams": {
+                    "text": "A sleek modern product displayed on a clean white background, professional lighting",
                 },
-                "outputConfig": {
-                    "s3Location": {
-                        "bucketName": self.settings.nova_reel_output_bucket,
-                        "objectKey": "nova-reel-test/e2e-validation.mp4"
-                    }
+                "videoGenerationConfig": {
+                    "durationSeconds": 6,
+                    "fps": 24,
+                    "dimension": "1280x720",
+                },
+            }
+            output_data_config = {
+                "s3OutputDataConfig": {
+                    "s3Uri": f"s3://{self.settings.nova_reel_output_bucket}/{output_prefix}"
                 }
             }
-            
+
             response = self.bedrock_client.start_async_invoke(
                 modelId='amazon.nova-reel-v1:0',
-                requestBody=json.dumps(test_request)
+                modelInput=model_input,
+                outputDataConfig=output_data_config,
             )
-            
-            invocation_id = response.get('invocationArn')
-            if not invocation_id:
+
+            invocation_arn = response.get('invocationArn')
+            if not invocation_arn:
                 logger.error('Failed to start validation invocation')
                 return False
-                
-            invocation_id = invocation_id.split('/')[-1]
-            logger.info(f'Started validation invocation: {invocation_id}')
-            
+
+            logger.info(f'Started validation invocation: {invocation_arn}')
+
             # Poll for completion (with timeout)
             max_wait_seconds = 180  # 3 minutes
             start_time = time.time()
-            
+
             while time.time() - start_time < max_wait_seconds:
                 try:
                     response = self.bedrock_client.get_async_invoke(
-                        invocationArn=f'arn:aws:bedrock:us-east-1:amazon.nova-reel-v1:0/invocation/{invocation_id}'
+                        invocationArn=invocation_arn
                     )
                     
                     status = response.get('status')
                     logger.info(f'Invocation status: {status}')
                     
                     if status == 'Completed':
-                        logger.info('✓ Nova Reel generation completed')
+                        # Read the actual S3 URI from the response
+                        output_uri = response.get('outputDataConfig', {}) \
+                                             .get('s3OutputDataConfig', {}) \
+                                             .get('s3Uri', '')
+                        logger.info(f'✓ Nova Reel generation completed, output: {output_uri}')
                         break
                     elif status == 'Failed':
                         failure_message = response.get('failureMessage', 'Unknown error')
@@ -212,37 +223,46 @@ class NovaReelValidator:
                         return False
                     elif status not in ['InProgress', 'Submitted']:
                         logger.warning(f'Unexpected status: {status}')
-                    
+
                     await asyncio.sleep(10)  # Wait 10 seconds between polls
-                    
+
                 except ClientError as e:
                     logger.error(f'Polling error: {e}')
                     return False
             else:
                 logger.error('End-to-end validation timed out')
                 return False
-            
-            # Download and validate the generated video
+
+            # Parse the S3 URI and download the generated video
+            if not output_uri:
+                logger.error('No output S3 URI in completed response')
+                return False
+
+            without_scheme = output_uri.removeprefix('s3://')
+            bucket, _, key = without_scheme.partition('/')
+            if not key.endswith('.mp4'):
+                key = key.rstrip('/') + '/output.mp4'
+
             local_path = Path('validation_nova_reel.mp4')
             try:
                 self.s3_client.download_file(
-                    Bucket=self.settings.nova_reel_output_bucket,
-                    Key='nova-reel-test/e2e-validation.mp4',
-                    Filename=str(local_path)
+                    Bucket=bucket,
+                    Key=key,
+                    Filename=str(local_path),
                 )
-                
+
                 if local_path.exists() and local_path.stat().st_size > 1000:
                     logger.info(f'✓ Video downloaded successfully: {local_path} ({local_path.stat().st_size} bytes)')
-                    
+
                     # Basic video validation using ffprobe if available
                     try:
                         import subprocess
                         result = subprocess.run([
-                            'ffprobe', '-v', 'quiet', '-show_entries', 
+                            'ffprobe', '-v', 'quiet', '-show_entries',
                             'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1',
                             str(local_path)
                         ], capture_output=True, text=True, check=False)
-                        
+
                         if result.returncode == 0:
                             duration = float(result.stdout.strip())
                             logger.info(f'✓ Video validation passed: duration={duration:.1f}s')
@@ -250,23 +270,19 @@ class NovaReelValidator:
                             logger.warning('ffprobe validation failed, but file exists')
                     except FileNotFoundError:
                         logger.info('ffprobe not available, skipping video validation')
-                    
+
                     return True
                 else:
                     logger.error('Downloaded video is empty or missing')
                     return False
-                    
+
             finally:
-                # Cleanup
                 if local_path.exists():
                     local_path.unlink()
-                
-                # Clean up S3
+
+                # Clean up S3 prefix
                 try:
-                    self.s3_client.delete_object(
-                        Bucket=self.settings.nova_reel_output_bucket,
-                        Key='nova-reel-test/e2e-validation.mp4'
-                    )
+                    self.s3_client.delete_object(Bucket=bucket, Key=key)
                 except ClientError:
                     pass  # Ignore cleanup errors
             

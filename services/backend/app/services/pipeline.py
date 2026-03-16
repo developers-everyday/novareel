@@ -293,7 +293,7 @@ async def _fetch_stock_footage_with_director(
   # Maps scene_order -> (clip_path, duration, query, relevance_score, is_ai_generated)
 
   # Collect Nova Reel tasks for batch processing
-  nova_reel_tasks: list[tuple[int, int, StoryboardSegment]] = []
+  nova_reel_tasks: list[tuple[int, int, StoryboardSegment, str]] = []
 
   for i, plan_entry in enumerate(scene_plan):
     if i >= len(storyboard):
@@ -325,7 +325,8 @@ async def _fetch_stock_footage_with_director(
       continue
 
     if media_decision == 'nova_reel':
-      nova_reel_tasks.append((i, scene_order, storyboard[i]))
+      image_prompt = plan_entry.get('image_prompt', storyboard[i].visual_requirements or 'Product in lifestyle setting')
+      nova_reel_tasks.append((i, scene_order, storyboard[i], image_prompt))
       continue
 
     if media_decision == 'ai_generated':
@@ -459,15 +460,18 @@ async def _fetch_stock_footage_with_director(
     from app.services.nova_reel import NovaReelService
     nova_reel_service = NovaReelService(settings)
     
-    clip_map = await nova_reel_service.generate_batch(nova_reel_tasks, project_id)
+    clip_map = await nova_reel_service.generate_batch(nova_reel_tasks, project_id, clips_dir.name)
     
     # Add Nova Reel clips to downloaded_clips
     for scene_order, clip_path in clip_map.items():
+      image_prompt = next(
+          (task[3] for task in nova_reel_tasks if task[1] == scene_order), '[nova_reel]'
+      )
       downloaded_clips[scene_order] = (
-        clip_path, 
-        storyboard[scene_order - 1].duration_sec, 
-        f'[nova_reel] AI-generated video', 
-        10.0, 
+        clip_path,
+        storyboard[scene_order - 1].duration_sec,
+        f'[nova_reel] {image_prompt[:50]}',
+        10.0,
         True
       )
       logger.info('Scene %d: Nova Reel clip generated', scene_order)
