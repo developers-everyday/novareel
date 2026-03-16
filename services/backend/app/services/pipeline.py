@@ -655,7 +655,7 @@ async def process_generation_job(
       _audio_path = _storage_root / _audio_key
       _per_scene_duration: float | None = None
 
-      if not storage.exists(_audio_key):
+      if not storage.exists(_audio_key) or _audio_path.stat().st_size <= 1000:
         repo.update_job(job.id, status=JobStatus.NARRATION, stage=JobStatus.NARRATION, progress_pct=40, timings=timings)
         phase_start = time.perf_counter()
         _transcript = '\n'.join(script_lines)
@@ -759,7 +759,7 @@ async def process_generation_job(
     storage_root = settings.local_data_dir / settings.local_storage_dir
     audio_path = storage_root / audio_key
 
-    if storage.exists(audio_key):
+    if storage.exists(audio_key) and audio_path.stat().st_size > 1000:
       logger.info('Resuming: skipped NARRATION (cached)')
     else:
       repo.update_job(job.id, status=JobStatus.NARRATION, stage=JobStatus.NARRATION, progress_pct=70, timings=timings)

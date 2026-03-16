@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import io
 import logging
 
@@ -32,7 +33,12 @@ class EdgeTTSVoiceProvider(VoiceProvider):
     log.info('EdgeTTS selected voice=%s for language=%s gender=%s', voice_name, language, voice_gender)
 
     try:
-      return asyncio.run(self._async_synthesize(edge_tts, text[:3000], voice_name))
+      # Run in a dedicated thread so asyncio.run() works even when called
+      # from within a running event loop (e.g. the async pipeline worker).
+      with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(
+          asyncio.run, self._async_synthesize(edge_tts, text[:3000], voice_name)
+        ).result()
     except Exception as exc:
       log.warning('EdgeTTS synthesis failed: %s', exc)
       return MOCK_SILENT_MP3
