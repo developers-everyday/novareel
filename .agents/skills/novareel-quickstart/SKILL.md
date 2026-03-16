@@ -50,7 +50,6 @@ marketting-tool/
         nova.py              # Bedrock script gen (returns ScriptScene list)
         broll_director.py    # Vision Director — plans/validates B-roll
         image_generator.py   # Nova Omni — AI image generation for brand campaigns
-        nova_reel.py         # Nova Reel async video generation service [PENDING]
         video.py             # ffmpeg slideshow rendering
         pipeline.py          # Full job orchestration
         storage.py           # Local / S3 abstraction
@@ -61,27 +60,7 @@ marketting-tool/
         local.py             # JSON file-based repo (dev)
         dynamo.py            # DynamoDB repo (prod)
     worker.py                # Background job runner
-    validate_novareel.py     # Standalone Nova Reel smoke test [PENDING]
-  docs/
-    *.md                     # High-level research/planning documents
-    impl/
-      *-implementation.md    # Detailed implementation plans (one per planning doc)
 ```
-
----
-
-## Documentation Convention
-
-Planning documents live in `docs/`. Each planning doc has a matching detailed implementation plan in `docs/impl/`, named after the source document:
-
-| Planning doc | Implementation plan |
-|---|---|
-| `docs/video-enhancement-plan.md` | `docs/impl/video-enhancement-plan-implementation.md` |
-
-**Rules for agents:**
-- Before starting any feature work, check `docs/impl/` for an existing implementation plan matching the planning document you were given.
-- When creating a new implementation plan, name it `<source-doc-name>-implementation.md` and save it to `docs/impl/`.
-- Never save implementation plans to the artifact/brain directory — they belong in the project repo so any developer or agent can find them.
 
 ---
 

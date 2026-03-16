@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from datetime import UTC, datetime, timedelta
@@ -21,7 +20,7 @@ def _retry_delay_seconds(settings: Settings, attempt_count: int) -> int:
   return int(settings.worker_retry_backoff_seconds * (2**exponent))
 
 
-async def process_job_by_id(job_id: str, *, queue: JobQueue, settings: Settings) -> bool:
+def process_job_by_id(job_id: str, *, queue: JobQueue, settings: Settings) -> bool:
   repo = get_repository()
   storage = get_storage()
   nova = get_nova_service()
@@ -42,7 +41,7 @@ async def process_job_by_id(job_id: str, *, queue: JobQueue, settings: Settings)
       job=claimed,
     )
   else:
-    await process_generation_job(repo=repo, storage=storage, nova=nova, video_service=video_service, job=claimed)
+    process_generation_job(repo=repo, storage=storage, nova=nova, video_service=video_service, job=claimed)
 
   final = repo.get_job(job_id)
   if not final:
@@ -98,7 +97,7 @@ async def process_job_by_id(job_id: str, *, queue: JobQueue, settings: Settings)
   return True
 
 
-async def run_once() -> int:
+def run_once() -> int:
   settings = get_settings()
   repo = get_repository()
   queue = get_queue()
@@ -108,7 +107,7 @@ async def run_once() -> int:
   if settings.queue_backend == 'sqs':
     messages = queue.receive(max_messages=5, wait_seconds=10)
     for job_id, receipt_handle in messages:
-      if await process_job_by_id(job_id, queue=queue, settings=settings):
+      if process_job_by_id(job_id, queue=queue, settings=settings):
         processed += 1
       if receipt_handle:
         queue.ack(receipt_handle)
@@ -116,18 +115,18 @@ async def run_once() -> int:
 
   queued_jobs = repo.list_queued_jobs(limit=5)
   for job in queued_jobs:
-    if await process_job_by_id(job.id, queue=queue, settings=settings):
+    if process_job_by_id(job.id, queue=queue, settings=settings):
       processed += 1
 
   return processed
 
 
-async def run_forever() -> None:
+def run_forever() -> None:
   settings = get_settings()
   logger.info('Worker started (queue_backend=%s)', settings.queue_backend)
 
   while True:
-    processed = await run_once()
+    processed = run_once()
     if processed == 0:
       time.sleep(settings.worker_poll_seconds)
       continue
@@ -160,4 +159,4 @@ if __name__ == '__main__':
   if mode == 'celery':
     run_celery_worker()
   else:
-    asyncio.run(run_forever())
+    run_forever()

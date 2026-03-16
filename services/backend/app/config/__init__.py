@@ -93,9 +93,6 @@ class Settings(BaseSettings):
   bedrock_model_orchestrator: str = 'amazon.nova-pro-v1:0'  # reasoning / orchestration
   use_agentic_orchestrator: bool = True  # When True, Nova Pro orchestrates the pipeline
   orchestrator_max_turns: int = 10  # safety cap on agentic loop iterations
-  # Nova Reel video generation
-  use_nova_reel: bool = False
-  nova_reel_output_bucket: str | None = None
 
 
 @lru_cache

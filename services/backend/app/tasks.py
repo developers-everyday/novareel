@@ -66,7 +66,7 @@ def _resolve_services():
   return repo, storage, nova, video_service
 
 
-async def process_generation_task(job_id: str) -> dict[str, Any]:
+def process_generation_task(job_id: str) -> dict[str, Any]:
   """Process a generation job — wraps process_generation_job() for Celery.
 
   Args:
@@ -85,7 +85,7 @@ async def process_generation_task(job_id: str) -> dict[str, Any]:
     return {'job_id': job_id, 'status': 'not_found'}
 
   try:
-    await process_generation_job(
+    process_generation_job(
       repo=repo,
       storage=storage,
       nova=nova,

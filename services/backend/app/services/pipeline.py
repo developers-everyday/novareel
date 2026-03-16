@@ -87,7 +87,7 @@ def _select_cleanest_image(image_analysis: list[dict]) -> str | None:
   return scored[0][1] if scored else None
 
 
-async def _fetch_stock_footage(
+def _fetch_stock_footage(
   *,
   storyboard: list[StoryboardSegment],
   script_lines: list[str],
@@ -149,7 +149,7 @@ async def _fetch_stock_footage(
 
   # ── Vision Director path ─────────────────────────────────────────
   if settings.use_vision_director and script_scenes:
-    return await _fetch_stock_footage_with_director(
+    return _fetch_stock_footage_with_director(
       storyboard=storyboard,
       script_scenes=script_scenes,
       product_description=product_description,
@@ -262,7 +262,7 @@ async def _fetch_stock_footage(
   return updated_storyboard
 
 
-async def _fetch_stock_footage_with_director(
+def _fetch_stock_footage_with_director(
   *,
   storyboard: list[StoryboardSegment],
   script_scenes: list[ScriptScene],
@@ -292,9 +292,6 @@ async def _fetch_stock_footage_with_director(
   downloaded_clips: dict[int, tuple[Path, float, str, float | None, bool]] = {}
   # Maps scene_order -> (clip_path, duration, query, relevance_score, is_ai_generated)
 
-  # Collect Nova Reel tasks for batch processing
-  nova_reel_tasks: list[tuple[int, int, StoryboardSegment, str]] = []
-
   for i, plan_entry in enumerate(scene_plan):
     if i >= len(storyboard):
       break
@@ -322,11 +319,6 @@ async def _fetch_stock_footage_with_director(
           cx=fo.get('cx', 0.5), cy=fo.get('cy', 0.5),
           w=fo.get('w', 0.6), h=fo.get('h', 0.8),
         )
-      continue
-
-    if media_decision == 'nova_reel':
-      image_prompt = plan_entry.get('image_prompt', storyboard[i].visual_requirements or 'Product in lifestyle setting')
-      nova_reel_tasks.append((i, scene_order, storyboard[i], image_prompt))
       continue
 
     if media_decision == 'ai_generated':
@@ -455,27 +447,6 @@ async def _fetch_stock_footage_with_director(
       logger.warning('Scene %d: all candidates rejected (best_score=%.1f, threshold=%.1f), keeping product image',
                       scene_order, best_score, settings.broll_validation_threshold)
 
-  # Process Nova Reel tasks in batch
-  if nova_reel_tasks and settings.use_nova_reel:
-    from app.services.nova_reel import NovaReelService
-    nova_reel_service = NovaReelService(settings)
-    
-    clip_map = await nova_reel_service.generate_batch(nova_reel_tasks, project_id, clips_dir.name)
-    
-    # Add Nova Reel clips to downloaded_clips
-    for scene_order, clip_path in clip_map.items():
-      image_prompt = next(
-          (task[3] for task in nova_reel_tasks if task[1] == scene_order), '[nova_reel]'
-      )
-      downloaded_clips[scene_order] = (
-        clip_path,
-        storyboard[scene_order - 1].duration_sec,
-        f'[nova_reel] {image_prompt[:50]}',
-        10.0,
-        True
-      )
-      logger.info('Scene %d: Nova Reel clip generated', scene_order)
-
   # Build updated storyboard
   if not downloaded_clips:
     logger.info('Vision Director: no B-roll clips passed validation, keeping original storyboard')
@@ -513,7 +484,7 @@ async def _fetch_stock_footage_with_director(
   return updated_storyboard
 
 
-async def process_generation_job(
+def process_generation_job(
   *,
   repo: Repository,
   storage: StorageService,
@@ -707,7 +678,7 @@ async def process_generation_job(
           storyboard = [StoryboardSegment(**s) for s in json.loads(existing_broll)]
           logger.info('Resuming: skipped STOCK FOOTAGE (cached)')
         else:
-          storyboard = await _fetch_stock_footage(
+          storyboard = _fetch_stock_footage(
             storyboard=storyboard,
             script_lines=script_lines,
             script_scenes=script_scenes,
