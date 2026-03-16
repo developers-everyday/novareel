@@ -191,7 +191,7 @@ async def _fetch_stock_footage(
     clip_path = clips_dir / f'broll_{scene_order:03d}.mp4'
     seg_duration = storyboard[i].duration_sec if i < len(storyboard) else 5.0
 
-    if settings.use_mock_ai:
+    if settings.use_mock_ai and not settings.pexels_api_key:
       # Mock mode: generate a solid-color placeholder clip via ffmpeg
       # instead of making real HTTP calls to Pexels.
       _ffmpeg = shutil.which('ffmpeg')
@@ -386,7 +386,7 @@ async def _fetch_stock_footage_with_director(
     clip_path = clips_dir / f'broll_{scene_order:03d}.mp4'
     seg_duration = storyboard[i].duration_sec
 
-    if settings.use_mock_ai:
+    if settings.use_mock_ai and not settings.pexels_api_key:
       _ffmpeg = shutil.which('ffmpeg')
       if _ffmpeg:
         _width, _height = ('1920', '1080') if aspect_ratio == '16:9' else (

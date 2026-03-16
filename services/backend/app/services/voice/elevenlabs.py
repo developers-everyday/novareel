@@ -21,6 +21,7 @@ class ElevenLabsVoiceProvider(VoiceProvider):
   def __init__(self, settings: Settings):
     self._settings = settings
     self._api_key = settings.elevenlabs_api_key
+    log.info('ElevenLabs key loaded (prefix: %s...)', (self._api_key or '')[:12])
     if not self._api_key:
       raise ValueError(
         'ElevenLabs API key is required. Set NOVAREEL_ELEVENLABS_API_KEY in .env '
@@ -65,5 +66,6 @@ class ElevenLabsVoiceProvider(VoiceProvider):
       response.raise_for_status()
       return response.content
     except Exception as exc:
-      log.warning('ElevenLabs synthesis failed: %s', exc)
-      return MOCK_SILENT_MP3
+      log.warning('ElevenLabs synthesis failed: %s — falling back to EdgeTTS', exc)
+      from app.services.voice.edge_tts import EdgeTTSVoiceProvider
+      return EdgeTTSVoiceProvider(self._settings).synthesize(text, voice_gender=voice_gender, language=language)

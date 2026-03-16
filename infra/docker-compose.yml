@@ -35,6 +35,7 @@ services:
       NOVAREEL_GOOGLE_CLIENT_SECRET: ''
       NOVAREEL_SOCIAL_REDIRECT_BASE_URL: http://localhost:8000
       NOVAREEL_ENCRYPTION_KEY: ''
+      NOVAREEL_PEXELS_API_KEY: ${NOVAREEL_PEXELS_API_KEY:-}
     depends_on:
       - redis
 
@@ -53,6 +54,7 @@ services:
       NOVAREEL_WORKER_MODE: polling
       NOVAREEL_CELERY_BROKER_URL: redis://redis:6379/0
       NOVAREEL_FFMPEG_PRESET: medium
+      NOVAREEL_PEXELS_API_KEY: ${NOVAREEL_PEXELS_API_KEY:-}
     depends_on:
       - api
       - redis

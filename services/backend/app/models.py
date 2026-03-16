@@ -67,20 +67,20 @@ class GenerateRequest(BaseModel):
   # Phase 1 (existing)
   aspect_ratio: Literal['16:9', '1:1', '9:16'] = '16:9'
   voice_style: Literal['energetic', 'professional', 'friendly'] = 'energetic'
-  voice_provider: Literal['polly', 'edge_tts', 'elevenlabs'] = 'polly'
+  voice_provider: Literal['polly', 'edge_tts', 'elevenlabs'] = 'edge_tts'
   voice_gender: Literal['male', 'female'] = 'female'
   language: str = 'en'
-  background_music: Literal['none', 'auto', 'upbeat', 'calm', 'corporate', 'luxury'] = 'auto'
+  background_music: Literal['none', 'auto', 'upbeat', 'calm', 'corporate', 'luxury'] = 'calm'
   idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
   # Phase 2
-  script_template: str = 'product_showcase'
-  video_style: Literal['product_only', 'product_lifestyle', 'lifestyle_focus'] = 'product_only'
+  script_template: str = 'problem_solution'
+  video_style: Literal['product_only', 'product_lifestyle', 'lifestyle_focus'] = 'product_lifestyle'
   transition_style: Literal[
     'none', 'crossfade', 'slide_left', 'slide_right',
     'slide_up', 'slide_down', 'wipe_left', 'wipe_right',
     'fade_black', 'fade_white', 'circle_open', 'circle_close', 'dissolve',
-  ] = 'none'
-  caption_style: Literal['none', 'simple', 'word_highlight', 'karaoke'] = 'none'
+  ] = 'crossfade'
+  caption_style: Literal['none', 'simple', 'word_highlight', 'karaoke'] = 'karaoke'
   show_title_card: bool = False
   cta_text: str | None = None
 
@@ -96,17 +96,17 @@ class JobCreateParams(BaseModel):
   """All parameters for creating a generation or translation job."""
   aspect_ratio: str = '16:9'
   voice_style: str = 'energetic'
-  voice_provider: str = 'polly'
+  voice_provider: str = 'edge_tts'
   voice_gender: str = 'female'
   language: str = 'en'
-  background_music: str = 'auto'
+  background_music: str = 'calm'
   idempotency_key: str | None = None
   max_attempts: int = 3
   # Phase 2
-  script_template: str = 'product_showcase'
-  video_style: str = 'product_only'
-  transition_style: str = 'none'
-  caption_style: str = 'none'
+  script_template: str = 'problem_solution'
+  video_style: str = 'product_lifestyle'
+  transition_style: str = 'crossfade'
+  caption_style: str = 'karaoke'
   show_title_card: bool = False
   cta_text: str | None = None
   job_type: str = 'generation'
@@ -129,10 +129,10 @@ class GenerationJobRecord(BaseModel):
   updated_at: datetime
   aspect_ratio: str = '16:9'
   voice_style: str = 'energetic'
-  voice_provider: str = 'polly'
+  voice_provider: str = 'edge_tts'
   voice_gender: str = 'female'
   language: str = 'en'
-  background_music: str = 'auto'
+  background_music: str = 'calm'
   idempotency_key: str | None = None
   attempt_count: int = 0
   max_attempts: int = 3
@@ -142,10 +142,10 @@ class GenerationJobRecord(BaseModel):
   # Phase 2
   job_type: str = 'generation'
   source_job_id: str | None = None
-  script_template: str = 'product_showcase'
-  video_style: str = 'product_only'
-  transition_style: str = 'none'
-  caption_style: str = 'none'
+  script_template: str = 'problem_solution'
+  video_style: str = 'product_lifestyle'
+  transition_style: str = 'crossfade'
+  caption_style: str = 'karaoke'
   show_title_card: bool = False
   cta_text: str | None = None
   # Phase 3

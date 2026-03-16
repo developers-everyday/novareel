@@ -10,6 +10,7 @@ class Settings(BaseSettings):
   model_config = SettingsConfigDict(
     env_prefix='NOVAREEL_',
     env_file=[
+      str(Path(__file__).resolve().parents[4] / '.env'),  # project root (monorepo root / /workspace in containers)
       str(Path(__file__).resolve().parents[2] / '.env'),  # backend service root (or /app in containers)
       '.env',                                              # CWD fallback
     ],
@@ -60,7 +61,7 @@ class Settings(BaseSettings):
   worker_poll_seconds: int = 4
   worker_retry_backoff_seconds: int = 20
   prompt_templates_dir: str = Field(default_factory=lambda: str(Path(__file__).resolve().parents[2] / 'prompt_templates'))
-  default_voice_provider: str = 'polly'  # 'nova_sonic', 'polly', 'edge_tts', or 'elevenlabs'
+  default_voice_provider: str = 'edge_tts'  # 'nova_sonic', 'polly', 'edge_tts', or 'elevenlabs'
   transcription_backend: str = 'mock'  # 'aws_transcribe', 'whisper', or 'mock'
   whisper_model: str = 'base'
   pexels_api_key: str | None = None
