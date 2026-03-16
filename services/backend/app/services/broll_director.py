@@ -40,21 +40,23 @@ _PLAN_TOOL_SPEC = {
                             'properties': {
                                 'media_type': {
                                     'type': 'string',
-                                    'enum': ['product_closeup', 'broll', 'product_in_context', 'ai_generated'],
+                                    'enum': ['product_closeup', 'broll', 'product_in_context', 'ai_generated', 'nova_reel'],
                                     'description': (
                                         'product_closeup: keep the uploaded product image with tight framing. '
                                         'broll: replace with stock footage — provide a search_query. '
                                         'product_in_context: keep product image but suggest wider/different framing. '
-                                        'ai_generated: generate a new contextual image using AI (Nova Omni) — '
-                                        'provide an image_prompt describing the desired scene with the product.'
+                                        'ai_generated: generate a new contextual image using AI — only as a last resort. '
+                                        'nova_reel: generate a short AI video clip from the product image — '
+                                        'use this for dynamic lifestyle/action scenes where motion adds real value. '
+                                        'Requires an image_prompt describing the desired motion and scene.'
                                     ),
                                 },
                                 'image_prompt': {
                                     'type': 'string',
                                     'description': (
-                                        'Prompt for AI image generation (required when media_type is "ai_generated"). '
+                                        'Prompt for AI image/video generation (required when media_type is "ai_generated" or "nova_reel"). '
                                         'Describe the scene showing the product in a lifestyle/campaign context. '
-                                        'Be specific about lighting, setting, and composition.'
+                                        'Be specific about lighting, setting, and composition. For nova_reel, also describe desired motion.'
                                     ),
                                 },
                                 'search_query': {
@@ -235,7 +237,10 @@ class BRollDirector:
             f'- "product_closeup": Use the uploaded product image with tight framing on a key feature. THIS IS THE DEFAULT — use it unless there is a strong reason not to.\n'
             f'- "product_in_context": Use the product image but with wider framing to show context.\n'
             f'- "broll": Use stock footage — provide a specific, visual Pexels search query (3-6 words). Only use this for mood/atmosphere shots where the product does NOT need to appear.\n'
-            f'- "ai_generated": Generate a new image using AI — ONLY as a last resort when no uploaded image fits AND the scene specifically needs the product in a context that cannot be achieved with the existing images.\n\n'
+            f'- "ai_generated": Generate a new image using AI — ONLY as a last resort when no uploaded image fits AND the scene specifically needs the product in a context that cannot be achieved with the existing images.\n'
+            f'- "nova_reel": Generate a 6-second AI video clip using Amazon Nova Reel. Use this when\n'
+            f'  the scene calls for dynamic motion around the product (e.g. liquid splashing, lighting\n'
+            f'  sweep, camera pull-back). Requires an image_prompt. Use sparingly — 1-2 scenes maximum.\n\n'
             f'Rules:\n'
             f'- ALWAYS prioritize the uploaded product images first. The viewer should see the REAL product, not AI-generated versions.\n'
             f'- The first and last scenes MUST use product_closeup or product_in_context.\n'

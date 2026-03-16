@@ -524,7 +524,7 @@ def get_dead_letter_jobs(
 
 
 @router.post('/jobs/{job_id}:process', response_model=GenerationJobRecord)
-def process_single_job(
+async def process_single_job(
   job_id: str,
   current_user: AuthUser = Depends(get_current_user),
   repo: Repository = Depends(get_repository),
@@ -552,7 +552,7 @@ def process_single_job(
     process_translation_job(repo=repo, storage=storage, translation_service=translation_service, video_service=video_service, job=target_job)
   else:
     from app.services.pipeline import process_generation_job
-    process_generation_job(repo=repo, storage=storage, nova=nova, video_service=video_service, job=target_job)
+    await process_generation_job(repo=repo, storage=storage, nova=nova, video_service=video_service, job=target_job)
   final_job = repo.get_job(job_id)
   if not final_job:
     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Job state missing')
@@ -1029,7 +1029,7 @@ def update_storyboard(
 
 
 @router.post('/projects/{project_id}/jobs/{job_id}/approve')
-def approve_storyboard(
+async def approve_storyboard(
   project_id: str,
   job_id: str,
   current_user: AuthUser = Depends(get_current_user),
@@ -1064,7 +1064,7 @@ def approve_storyboard(
   )
 
   from app.services.pipeline import process_generation_job
-  process_generation_job(repo=repo, storage=storage, nova=nova, video_service=video_service, job=job)
+  await process_generation_job(repo=repo, storage=storage, nova=nova, video_service=video_service, job=job)
 
   final_job = repo.get_job(job_id)
   if not final_job:
