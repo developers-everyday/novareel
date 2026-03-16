@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import logging
 import time
@@ -103,54 +104,60 @@ class NovaReelService:
             logger.error('Nova Reel batch generation failed: %s', e)
             return {}
 
+    @staticmethod
+    def _prepare_image(image_bytes: bytes, target_w: int = 1280, target_h: int = 720) -> bytes:
+        """Resize and letterbox image to exactly target_w x target_h JPEG.
+
+        Nova Reel requires the input image to be exactly 1280x720.
+        Maintains aspect ratio and pads with a neutral grey background.
+        """
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        img.thumbnail((target_w, target_h), Image.LANCZOS)
+
+        canvas = Image.new('RGB', (target_w, target_h), (128, 128, 128))
+        x = (target_w - img.width) // 2
+        y = (target_h - img.height) // 2
+        canvas.paste(img, (x, y))
+
+        buf = io.BytesIO()
+        canvas.save(buf, format='JPEG', quality=95)
+        return buf.getvalue()
+
     async def _start_async_invocation(self, scene_order: int, image_prompt: str, image_bytes: bytes | None) -> str | None:
         """Start an async Nova Reel invocation."""
         try:
-            # Prepare the request for Nova Reel
+            # Prepare the request for Nova Reel.
+            # Both text-only and image-guided use taskType TEXT_VIDEO.
+            # An image is passed as an optional `images` array inside textToVideoParams.
+            # Nova Reel requires the image to be exactly 1280x720 JPEG.
+            text_to_video_params: dict = {"text": image_prompt}
             if image_bytes:
-                # Image-to-video mode
-                request_body = {
-                    "taskType": "IMAGE_VIDEO",
-                    "imageToVideoParams": {
-                        "text": image_prompt,
-                        "images": [
-                            {
-                                "format": "jpeg" if image_bytes[0] == 0xFF else "png",
-                                "source": {
-                                    "bytes": base64.b64encode(image_bytes).decode("utf-8")
-                                }
-                            }
-                        ]
-                    },
-                    "videoGenerationConfig": {
-                        "durationSeconds": 6,
-                        "fps": 24,
-                        "dimension": "1280x720",
-                    },
-                    "outputDataConfig": {
-                        "s3OutputDataConfig": {
-                            "s3Uri": f"s3://{self._settings.nova_reel_output_bucket}/nova-reel-output/scene-{scene_order:03d}/"
-                        }
+                prepared = self._prepare_image(image_bytes)
+                text_to_video_params["images"] = [
+                    {
+                        "format": "jpeg",
+                        "source": {
+                            "bytes": base64.b64encode(prepared).decode("utf-8")
+                        },
                     }
-                }
-            else:
-                # Text-only fallback (should not happen in normal operation)
-                request_body = {
-                    "taskType": "TEXT_VIDEO",
-                    "textToVideoParams": {
-                        "text": image_prompt,
-                    },
-                    "videoGenerationConfig": {
-                        "durationSeconds": 6,
-                        "fps": 24,
-                        "dimension": "1280x720",
-                    },
-                    "outputDataConfig": {
-                        "s3OutputDataConfig": {
-                            "s3Uri": f"s3://{self._settings.nova_reel_output_bucket}/nova-reel-output/scene-{scene_order:03d}/"
-                        }
+                ]
+
+            request_body = {
+                "taskType": "TEXT_VIDEO",
+                "textToVideoParams": text_to_video_params,
+                "videoGenerationConfig": {
+                    "durationSeconds": 6,
+                    "fps": 24,
+                    "dimension": "1280x720",
+                },
+                "outputDataConfig": {
+                    "s3OutputDataConfig": {
+                        "s3Uri": f"s3://{self._settings.nova_reel_output_bucket}/nova-reel-output/scene-{scene_order:03d}/"
                     }
-                }
+                },
+            }
 
             # Separate model input from output configuration
             model_input = {k: v for k, v in request_body.items() if k != 'outputDataConfig'}
